@@ -1,4 +1,4 @@
-package mcp
+package backend
 
 import (
 	"encoding/json"
@@ -157,7 +157,7 @@ func TestQueryFormat(t *testing.T) {
 		return
 	}
 
-	m := MCP{
+	m := MCPBackend{
 		queries: qc,
 	}
 

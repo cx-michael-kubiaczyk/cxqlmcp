@@ -1,4 +1,4 @@
-package mcp
+package backend
 
 import (
 	"archive/zip"
@@ -30,7 +30,7 @@ func extractIDFromURL(path string) (ProjectID, ScanID, ResultID string, err erro
 	return
 }
 
-func (m *MCP) createCodeExtract(sid, rid string) error {
+func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 	filter := Cx1ClientGo.ScanSASTResultsFilter{
 		BaseFilter: Cx1ClientGo.BaseFilter{Limit: 10},
 		ScanID:     sid,
@@ -47,7 +47,7 @@ func (m *MCP) createCodeExtract(sid, rid string) error {
 	}
 
 	result := results[0]
-	m.result = &result
+	m.Result = &result
 
 	m.logger.Infof("Result: %+v", result)
 	for i, n := range result.Data.Nodes {
@@ -67,7 +67,7 @@ func (m *MCP) createCodeExtract(sid, rid string) error {
 
 }
 
-func (m *MCP) addFile(scanId, filePath string) error {
+func (m *MCPBackend) addFile(scanId, filePath string) error {
 	if _, ok := m.files[filePath]; ok {
 		return nil
 	}
@@ -81,7 +81,7 @@ func (m *MCP) addFile(scanId, filePath string) error {
 	return nil
 }
 
-func (m *MCP) augmentFile(filePath string, nodeNumber int, node Cx1ClientGo.ScanSASTResultNodes, queryName string) {
+func (m *MCPBackend) augmentFile(filePath string, nodeNumber int, node Cx1ClientGo.ScanSASTResultNodes, queryName string) {
 	if _, ok := m.files[filePath]; !ok {
 		return
 	}
@@ -93,7 +93,7 @@ func (m *MCP) augmentFile(filePath string, nodeNumber int, node Cx1ClientGo.Scan
 	m.files[filePath].Augment(queryName, nodeNumber, node.Line)
 }
 
-func (m *MCP) getZip() []byte {
+func (m *MCPBackend) getZip() []byte {
 	buf := new(bytes.Buffer)
 	w := zip.NewWriter(buf)
 
@@ -123,42 +123,7 @@ func (m *MCP) getZip() []byte {
 	return buf.Bytes()
 }
 
-func (m *MCP) initialize(path string) error {
-	pid, sid, rid, err := extractIDFromURL(path)
-	if err != nil {
-		return err
-	}
-	m.files = make(map[string]*FileSource)
-
-	project, err := m.cx1client.GetProjectByID(pid)
-	if err != nil {
-		return fmt.Errorf("failed to get project: %v", err)
-	}
-	m.project = &project
-
-	if len(*project.Applications) == 1 {
-		app, err := m.cx1client.GetApplicationByID((*project.Applications)[0])
-		if err != nil {
-			return fmt.Errorf("failed to get application: %v", err)
-		}
-		m.application = &app
-	}
-
-	scan, err := m.cx1client.GetScanByID(sid)
-	if err != nil {
-		return fmt.Errorf("failed to get scan: %v", err)
-	}
-	m.scan = &scan
-
-	err = m.createCodeExtract(sid, rid)
-	if err != nil {
-		return fmt.Errorf("failed to create code extract: %v", err)
-	}
-
-	return nil
-}
-
-func (m *MCP) getQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
+func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
 	var product, tenant, application, project *Cx1ClientGo.SASTQuery
 
 	product = m.queries.GetQueryByLevelAndName(
@@ -201,7 +166,7 @@ func (m *MCP) getQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SA
 		application = m.queries.GetQueryByLevelAndID(
 			m.cx1client.QueryTypeApplication(),
 			m.application.ApplicationID,
-			m.result.Data.QueryID,
+			m.Result.Data.QueryID,
 		)
 
 		if application != nil {
@@ -217,7 +182,7 @@ func (m *MCP) getQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SA
 		project = m.queries.GetQueryByLevelAndID(
 			m.cx1client.QueryTypeProject(),
 			m.project.ProjectID,
-			m.result.Data.QueryID,
+			m.Result.Data.QueryID,
 		)
 		if project != nil {
 			q, err := m.cx1client.GetAuditSASTQueryByKey(m.session, project.EditorKey)
@@ -231,7 +196,7 @@ func (m *MCP) getQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SA
 	return []*Cx1ClientGo.SASTQuery{product, tenant, application, project}, nil
 }
 
-func (m *MCP) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
+func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 	var result strings.Builder
 
 	if query.Level == "Cx" {
@@ -257,7 +222,7 @@ func (m *MCP) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 	return result.String()
 }
 
-func (m *MCP) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery) string {
+func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery) string {
 	var result strings.Builder
 
 	var product = queries[0]
@@ -304,70 +269,7 @@ func (m *MCP) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery) string {
 	return result.String()
 }
 
-func (m *MCP) createAuditSession() error {
-	session, err := m.cx1client.GetAuditSessionByID("sast", m.project.ProjectID, m.scan.ScanID)
-	if err != nil {
-		return fmt.Errorf("failed to get audit session: %v", err)
-	}
-	m.session = &session
-
-	aq, err := m.cx1client.GetAuditSASTQueriesByLevelID(m.session, m.cx1client.QueryTypeProject(), m.project.ProjectID)
-	if err != nil {
-		return fmt.Errorf("failed to get queries: %v", err)
-	}
-
-	m.queries.AddCollection(&aq)
-
-	query := m.queries.GetQueryByID(m.result.Data.QueryID)
-	if query == nil {
-		return fmt.Errorf("failed to find query with ID %d", m.result.Data.QueryID)
-	}
-	m.logger.Infof("Finding is from query %s", query.String())
-
-	m.targetQuery, err = m.getQueryHierarchy(query.Language, query.Group, query.Name)
-	if err != nil {
-		return fmt.Errorf("failed to get query hierarchy: %v", err)
-	}
-
-	return nil
-}
-
-func (m *MCP) checkFindingStatus() (bool, error) {
-	m.vuln = nil
-	err := m.sessionRefresh()
-	if err != nil {
-		return false, fmt.Errorf("failed to refresh audit session: %v", err)
-	}
-
-	result, err := m.cx1client.RunSASTQuery(m.session, m.closestQuery(), m.closestQuery().Source)
-	if err != nil {
-		return false, fmt.Errorf("failed to run query: %v", err)
-	}
-
-	m.logger.Infof("Looking for finding: %+v", m.result)
-
-	for _, r := range result.Results {
-		vulnerabilities, err := m.cx1client.GetQueryRunResultsByID(m.session, r.RunID)
-		if err != nil {
-			return false, fmt.Errorf("Error getting results: %s", err)
-		} else {
-			for _, v := range vulnerabilities {
-				vuln, err := m.cx1client.GetQueryRunVulnerabilityByID(m.session, r.RunID, v.VulnerabilityID)
-				if err != nil {
-					return false, fmt.Errorf("Error getting vulnerability: %s", err)
-				}
-				if findingsEqual(m.result, vuln) {
-					m.vuln = &vuln
-					return true, nil
-				}
-			}
-		}
-	}
-
-	return false, nil
-}
-
-func (m *MCP) closestQuery() *Cx1ClientGo.SASTQuery {
+func (m *MCPBackend) closestQuery() *Cx1ClientGo.SASTQuery {
 	for i := 3; i >= 0; i-- {
 		if m.targetQuery[i] != nil {
 			return m.targetQuery[i]
@@ -376,9 +278,9 @@ func (m *MCP) closestQuery() *Cx1ClientGo.SASTQuery {
 	return nil
 }
 
-func (m *MCP) sessionRefresh() error {
+func (m *MCPBackend) sessionRefresh() error {
 	if m.session == nil {
-		return m.createAuditSession()
+		return m.CreateAuditSession()
 	}
 
 	err := m.cx1client.AuditSessionKeepAlive(m.session)
@@ -387,10 +289,10 @@ func (m *MCP) sessionRefresh() error {
 	}
 
 	m.endSession()
-	return m.createAuditSession()
+	return m.CreateAuditSession()
 }
 
-func (m *MCP) endSession() {
+func (m *MCPBackend) endSession() {
 	if m.session != nil {
 		err := m.cx1client.DeleteAuditSession(m.session)
 		if err != nil {

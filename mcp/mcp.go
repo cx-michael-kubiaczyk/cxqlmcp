@@ -1,34 +1,20 @@
 package mcp
 
 import (
-	"fmt"
-
 	"github.com/cxpsemea/Cx1ClientGo"
+	"github.com/cxpsemea/cxqlmcp/mcp/backend"
 	"github.com/sirupsen/logrus"
 )
 
-type FileSource []string
-
 type MCP struct {
-	cx1client   *Cx1ClientGo.Cx1Client
-	project     *Cx1ClientGo.Project
-	application *Cx1ClientGo.Application
-	scan        *Cx1ClientGo.Scan
-	result      *Cx1ClientGo.ScanSASTResult
-	vuln        *Cx1ClientGo.QueryVulnerability
-	session     *Cx1ClientGo.AuditSession
-	logger      *logrus.Logger
-	files       map[string]*FileSource // filename: code
-	queries     Cx1ClientGo.SASTQueryCollection
-	targetQuery []*Cx1ClientGo.SASTQuery
-	hld         string // high-level description of the query process
+	backend backend.MCPBackend
+	logger  *logrus.Logger
+	hld     string // high-level description of the query process
 }
 
 func NewMCP(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) *MCP {
 	return &MCP{
-		cx1client: cx1client,
-		logger:    logger,
-		files:     make(map[string]*FileSource),
+		backend: backend.NewBackend(cx1client, logger),
 		hld: `When a CxSAST scan runs, various "CxQL queries" (written as C# code modules) are run against an AST (abstract syntax tree) representation of a codebase.
 Each query returns a list of items representing nodes or dataflow paths through the AST.
 The CxSAST product includes a variety of queries covering a range of security vulnerabilities, such as Reflected XSS or SQL Injection.
@@ -50,21 +36,9 @@ When addressing false-positive results in a finding, the process follows these s
 
 func (m *MCP) Start() error {
 	m.logger.Info("Starting MCP server")
-	m.logger.Info("Getting query collection")
-	qc, err := m.cx1client.GetSASTQueryCollection()
-	if err != nil {
-		return err
-	}
-	m.queries = qc
 	return nil
 }
 
-func (f *FileSource) Augment(queryName string, nodeNumber int, line uint64) {
-	(*f)[line-1] = (*f)[line-1] + fmt.Sprintf("// Finding %s step %d", queryName, nodeNumber+1)
-}
-
 func (m *MCP) Shutdown() {
-	if m.session != nil {
-		m.endSession()
-	}
+	m.backend.Shutdown()
 }

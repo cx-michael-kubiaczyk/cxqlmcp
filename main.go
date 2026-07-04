@@ -27,7 +27,7 @@ func main() {
 	LogLevel := flag.String("log", "INFO", "Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL")
 
 	httpClient := &http.Client{}
-	if true {
+	if false {
 		proxyURL, _ := url.Parse("http://127.0.0.1:8080")
 		transport := &http.Transport{}
 		transport.Proxy = http.ProxyURL(proxyURL)
@@ -81,7 +81,50 @@ func main() {
 }
 
 func runTest(server *mcp.MCP, logger *logrus.Logger) {
-	err := server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName")
+	/*
+		Typical harness-driven flow:
+		Harness -> MCP: create session (from url)
+			MCP: create session
+			MCP: get query info
+			MCP: get code
+			MCP: get finding details
+			MCP: add finding details (dataflow path) as comments to code snippets
+		<-- MCP: prompt containing:
+				 - the explanation of the SAST system & query override process,
+				 - current finding details (description, recommendation),
+				 - code snippets with the dataflow path
+				 - the CxQL query that was used to find the issue
+		LLM -> MCP: run sub-query X
+			MCP: trigger query and get results (which may be multiple dataflow paths)
+			MCP: add results summaries (not full dataflow, just first+last nodes) as comments to code snippets
+		<-- MCP: prompt containing:
+				 - the explanation of the SAST system & query override process,
+				 - current finding details (description, recommendation),
+				 - code snippets with the dataflow path + sub-query results summaries
+			 	 - the CxQL query that was used to find the issue
+				 - the CxQL sub-query that was run
+		LLM: run updated sub-query X
+			MCP: trigger updated query and get results (which may be multiple dataflow paths)
+			MCP: add results summaries (not full dataflow, just first+last nodes) as comments to code snippets
+		<-- MCP: prompt containing:
+				 - the explanation of the SAST system & query override process,
+				 - current finding details (description, recommendation),
+				 - code snippets with the dataflow path + sub-query results summaries
+				 - the CxQL query that was used to find the issue
+				 - the updated CxQL sub-query that was run
+		Harness -> LLM: was this useful? (yes/no)
+		<-- LLM: yes/no (save or don't save)
+		Harness -> MCP: save updated sub-query or not
+		LLM: decide if more queries should be changed, or run the original query again to check the status
+		     - trigger update tools or "check if finding present" tool
+			 -
+
+
+
+
+		This test is a mock-harness flow
+	*/
+	_, err := server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName")
 	if err != nil {
 		logger.Errorf("Failed to create session from URL: %s", err)
 		return
