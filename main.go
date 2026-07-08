@@ -124,17 +124,26 @@ func runTest(server *mcp.MCP, logger *logrus.Logger) {
 
 		This test is a mock-harness flow
 	*/
-	_, err := server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName")
-	if err != nil {
-		logger.Errorf("Failed to create session from URL: %s", err)
-		return
-	}
+	logger.Infof("CreateSessionFromURL:\n%s\n",
+		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"),
+	)
 
-	queries, err := server.GetQueryInfo("JavaScript", "JavaScript_Medium_Threat", "Missing_HSTS_Header")
-	if err != nil {
-		logger.Errorf("Failed to get query info: %s", err)
-		return
-	}
-	logger.Infof("Query info: %s", queries)
+	logger.Infof("HLD:\n%s\n", server.HLD)
+
+	logger.Infof("Finding details:\n%s\n",
+		server.GetFindingDetails(),
+	)
+
+	logger.Infof("Code snippets:\n%s\n",
+		server.GetCodeSnippets(),
+	)
+
+	logger.Infof("Query info:\n%s\n",
+		server.GetQueryInfo("JavaScript", "JavaScript_Medium_Threat", "Missing_HSTS_Header"),
+	)
+
+	logger.Infof("Run sub-query Find_HSTS_Sanitize:\n%s\n",
+		server.RunQuery("JavaScript", "General", "Find_HSTS_Sanitize"),
+	)
 
 }

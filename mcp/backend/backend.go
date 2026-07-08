@@ -2,38 +2,41 @@ package backend
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 	"github.com/sirupsen/logrus"
 )
 
 type MCPBackend struct {
-	cx1client   *Cx1ClientGo.Cx1Client
-	project     *Cx1ClientGo.Project
-	application *Cx1ClientGo.Application
-	scan        *Cx1ClientGo.Scan
-	Result      *Cx1ClientGo.ScanSASTResult
-	Vuln        *Cx1ClientGo.QueryVulnerability
-	session     *Cx1ClientGo.AuditSession
-	logger      *logrus.Logger
-	files       map[string]*FileSource // filename: code
-	queries     Cx1ClientGo.SASTQueryCollection
-	targetQuery []*Cx1ClientGo.SASTQuery
+	cx1client    *Cx1ClientGo.Cx1Client
+	project      *Cx1ClientGo.Project
+	application  *Cx1ClientGo.Application
+	scan         *Cx1ClientGo.Scan
+	Result       *Cx1ClientGo.ScanSASTResult
+	Vuln         *Cx1ClientGo.QueryVulnerability
+	session      *Cx1ClientGo.AuditSession
+	logger       *logrus.Logger
+	files        map[string]*FileSource // filename: code
+	Queries      Cx1ClientGo.SASTQueryCollection
+	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
+	targetQuery  []*Cx1ClientGo.SASTQuery
 }
 
 func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBackend {
 	return MCPBackend{cx1client: cx1client,
-		logger: logger,
-		files:  make(map[string]*FileSource)}
+		logger:       logger,
+		files:        make(map[string]*FileSource),
+		descriptions: make(map[uint64]Cx1ClientGo.SASTQueryDescription)}
 }
 
 func (m *MCPBackend) Initialize(path string) error {
-	m.logger.Info("Getting query collection")
+	m.logger.Debug("Getting query collection")
 	qc, err := m.cx1client.GetSASTQueryCollection()
 	if err != nil {
 		return err
 	}
-	m.queries = qc
+	m.Queries = qc
 
 	pid, sid, rid, err := extractIDFromURL(path)
 	if err != nil {
@@ -89,13 +92,13 @@ func (m *MCPBackend) CreateAuditSession() error {
 		return fmt.Errorf("failed to get queries: %v", err)
 	}
 
-	m.queries.AddCollection(&aq)
+	m.Queries.AddCollection(&aq)
 
-	query := m.queries.GetQueryByID(m.Result.Data.QueryID)
+	query := m.Queries.GetQueryByID(m.Result.Data.QueryID)
 	if query == nil {
 		return fmt.Errorf("failed to find query with ID %d", m.Result.Data.QueryID)
 	}
-	m.logger.Infof("Finding is from query %s", query.String())
+	m.logger.Debugf("Finding is from query %s", query.String())
 
 	m.targetQuery, err = m.GetQueryHierarchy(query.Language, query.Group, query.Name)
 	if err != nil {
@@ -117,7 +120,7 @@ func (m *MCPBackend) CheckFindingStatus() (bool, error) {
 		return false, fmt.Errorf("failed to run query: %v", err)
 	}
 
-	m.logger.Infof("Looking for finding: %+v", m.Result)
+	m.logger.Debugf("Looking for finding: %+v", m.Result)
 
 	for _, r := range result.Results {
 		vulnerabilities, err := m.cx1client.GetQueryRunResultsByID(m.session, r.RunID)
@@ -138,4 +141,27 @@ func (m *MCPBackend) CheckFindingStatus() (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (m *MCPBackend) GetQueryDescription(queryId uint64) (Cx1ClientGo.SASTQueryDescription, error) {
+	if desc, ok := m.descriptions[queryId]; ok {
+		return desc, nil
+	}
+
+	description, err := m.cx1client.GetSASTQueryDescription(queryId)
+	if err != nil {
+		return Cx1ClientGo.SASTQueryDescription{}, fmt.Errorf("failed to get query description: %v", err)
+	}
+
+	m.descriptions[queryId] = description
+	return description, nil
+}
+
+func (m MCPBackend) GetCodeSnippets() string {
+	var str strings.Builder
+	for _, file := range m.files {
+		str.WriteString(file.Code())
+		str.WriteString("\n")
+	}
+	return str.String()
 }

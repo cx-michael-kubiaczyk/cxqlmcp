@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestQueryFormat(t *testing.T) {
 	}
 
 	m := MCPBackend{
-		queries: qc,
+		Queries: qc,
 	}
 
 	formatted := m.FormatQueryHierarchy(queries)
@@ -167,7 +168,7 @@ func TestQueryFormat(t *testing.T) {
 }
 
 func TestQueryCalls(t *testing.T) {
-	data, err := os.ReadFile("../queries.json")
+	data, err := os.ReadFile(filepath.Join("..", "..", "queries.json"))
 	if err != nil {
 		t.Errorf("Failed to read queries.json: %s", err)
 		return
@@ -187,6 +188,10 @@ func TestQueryCalls(t *testing.T) {
 	}
 
 	open, base, product := q.GetDependencies(&qc)
+	t.Logf("Open calls: %v", open)
+	t.Logf("Base calls: %v", base)
+	t.Logf("Product calls: %v", product)
+
 	if len(open) != 1 || open[0].Name != "Find_HSTS_Sanitize" {
 		t.Errorf("Failed to find open call to Find_HSTS_Sanitize")
 	}

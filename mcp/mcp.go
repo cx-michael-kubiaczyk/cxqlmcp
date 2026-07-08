@@ -9,13 +9,14 @@ import (
 type MCP struct {
 	backend backend.MCPBackend
 	logger  *logrus.Logger
-	hld     string // high-level description of the query process
+	HLD     string // high-level description of the query process
 }
 
 func NewMCP(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) *MCP {
 	return &MCP{
+		logger:  logger,
 		backend: backend.NewBackend(cx1client, logger),
-		hld: `When a CxSAST scan runs, various "CxQL queries" (written as C# code modules) are run against an AST (abstract syntax tree) representation of a codebase.
+		HLD: `When a CxSAST scan runs, various "CxQL queries" (written as C# code modules) are run against an AST (abstract syntax tree) representation of a codebase.
 Each query returns a list of items representing nodes or dataflow paths through the AST.
 The CxSAST product includes a variety of queries covering a range of security vulnerabilities, such as Reflected XSS or SQL Injection.
 Queries that represent security vulnerabilities can call other queries to assemble the dataflows from the 'source node' to the 'sink node' in the AST.
@@ -35,7 +36,7 @@ When addressing false-positive results in a finding, the process follows these s
 }
 
 func (m *MCP) Start() error {
-	m.logger.Info("Starting MCP server")
+	m.logger.Debug("Starting MCP server")
 	return nil
 }
 

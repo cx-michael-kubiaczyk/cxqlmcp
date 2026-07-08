@@ -49,18 +49,18 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 	result := results[0]
 	m.Result = &result
 
-	m.logger.Infof("Result: %+v", result)
+	m.logger.Debugf("Result: %+v", result)
 	for i, n := range result.Data.Nodes {
-		m.logger.Infof("Node %d: %+v", i, n)
+		m.logger.Debugf("Node %d: %+v", i, n)
 		if err := m.addFile(sid, n.FileName); err != nil {
 			return fmt.Errorf("failed to add file: %v", err)
 		}
 
-		m.augmentFile(n.FileName, i, n, result.Data.QueryName)
+		m.augmentFile("finding", n.FileName, i, n, result.Data.QueryName)
 	}
 
 	for file, source := range m.files {
-		m.logger.Infof("File: %s\n\n%s\n", file, strings.Join(*source, "\n"))
+		m.logger.Debugf("File: %s\n\n%s\n", file, strings.Join(source.code, "\n"))
 	}
 
 	return nil
@@ -76,21 +76,25 @@ func (m *MCPBackend) addFile(scanId, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get file source: %v", err)
 	}
-	sources := FileSource(strings.Split(strings.ReplaceAll(fileSource, "\r\n", "\n"), "\n"))
+	sources := FileSource{
+		code:    strings.Split(strings.ReplaceAll(fileSource, "\r\n", "\n"), "\n"),
+		Sources: make(map[string]struct{}),
+		Augs:    make(map[uint64][]FileAug),
+	}
 	m.files[filePath] = &sources
 	return nil
 }
 
-func (m *MCPBackend) augmentFile(filePath string, nodeNumber int, node Cx1ClientGo.ScanSASTResultNodes, queryName string) {
+func (m *MCPBackend) augmentFile(source, filePath string, nodeNumber int, node Cx1ClientGo.ScanSASTResultNodes, queryName string) {
 	if _, ok := m.files[filePath]; !ok {
 		return
 	}
 
-	if uint64(len(*m.files[filePath])) <= node.Line {
+	if uint64(len((*m.files[filePath]).code)) <= node.Line {
 		return
 	}
 
-	m.files[filePath].Augment(queryName, nodeNumber, node.Line)
+	m.files[filePath].Augment(source, fmt.Sprintf("Finding %s step %d", queryName, nodeNumber+1), node.Line)
 }
 
 func (m *MCPBackend) getZip() []byte {
@@ -109,12 +113,12 @@ func (m *MCPBackend) getZip() []byte {
 			m.logger.Errorf("failed to create zip entry for %s (original: %s): %v", archiveFilename, filename, err)
 			continue
 		}
-		content := strings.Join(*source, "\n")
+		content := source.Code()
 		if _, err := f.Write([]byte(content)); err != nil {
 			m.logger.Errorf("failed to write zip content for %s: %v", filename, err)
 			continue
 		}
-		m.logger.Infof("Created zip entry for %s", filename)
+		m.logger.Debugf("Created zip entry for %s", filename)
 	}
 
 	if err := w.Close(); err != nil {
@@ -124,9 +128,12 @@ func (m *MCPBackend) getZip() []byte {
 }
 
 func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
+	if m.project == nil {
+		return nil, fmt.Errorf("no project loaded")
+	}
 	var product, tenant, application, project *Cx1ClientGo.SASTQuery
 
-	product = m.queries.GetQueryByLevelAndName(
+	product = m.Queries.GetQueryByLevelAndName(
 		m.cx1client.QueryTypeProduct(),
 		m.cx1client.QueryTypeProduct(),
 		language,
@@ -134,7 +141,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 		name,
 	)
 
-	tenant = m.queries.GetQueryByLevelAndName(
+	tenant = m.Queries.GetQueryByLevelAndName(
 		m.cx1client.QueryTypeTenant(),
 		m.cx1client.QueryTypeTenant(),
 		language,
@@ -163,7 +170,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	}
 
 	if m.application != nil {
-		application = m.queries.GetQueryByLevelAndID(
+		application = m.Queries.GetQueryByLevelAndID(
 			m.cx1client.QueryTypeApplication(),
 			m.application.ApplicationID,
 			m.Result.Data.QueryID,
@@ -179,7 +186,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	}
 
 	if m.project != nil {
-		project = m.queries.GetQueryByLevelAndID(
+		project = m.Queries.GetQueryByLevelAndID(
 			m.cx1client.QueryTypeProject(),
 			m.project.ProjectID,
 			m.Result.Data.QueryID,
@@ -205,7 +212,9 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 		result.WriteString("Can edit: true\n")
 	}
 
-	open, base, product := query.GetDependencies(&m.queries)
+	result.WriteString(fmt.Sprintf("Source code: \n```csharp\n%s\n```\n", query.Source))
+
+	open, base, product := query.GetDependencies(&m.Queries)
 	if len(open)+len(base) > 0 {
 		result.WriteString("The following queries are called by this query and can be edited or overridden:\n")
 		for _, q := range open {
@@ -215,9 +224,12 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 			result.WriteString(fmt.Sprintf(" - %s.%s.%s\n", q.Language, q.Group, q.Name))
 		}
 	}
-	fmt.Printf("Query calls: %+v, %+v, %+v\n", open, base, product)
 
-	result.WriteString(fmt.Sprintf("Source code: \n```\n%s\n```\n", query.Source))
+	if len(product) > 0 {
+		result.WriteString("The following product-defined functions are called and cannot be edited or overridden:\n- ")
+		result.WriteString(strings.Join(product, "\n- "))
+		result.WriteString("\n")
+	}
 
 	return result.String()
 }
