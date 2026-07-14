@@ -16,6 +16,14 @@ type FileSource struct {
 	Augs    map[uint64][]FileAug
 }
 
+func NewFileSource(code string) FileSource {
+	return FileSource{
+		code:    strings.Split(strings.ReplaceAll(code, "\r\n", "\n"), "\n"),
+		Sources: make(map[string]struct{}),
+		Augs:    make(map[uint64][]FileAug),
+	}
+}
+
 func (f *FileSource) Augment(src, msg string, line uint64) {
 	f.Augs[line-1] = append(f.Augs[line-1], FileAug{Src: src, Msg: msg})
 	if _, ok := f.Sources[src]; !ok {

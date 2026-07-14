@@ -37,7 +37,7 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 		ResultIDs:  []string{rid},
 	}
 
-	_, results, err := m.cx1client.GetAllScanSASTResultsFiltered(filter)
+	_, results, err := m.Cx1Client.GetAllScanSASTResultsFiltered(filter)
 	if err != nil {
 		return fmt.Errorf("failed to get results: %v", err)
 	}
@@ -56,7 +56,7 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 			return fmt.Errorf("failed to add file: %v", err)
 		}
 
-		m.augmentFile("finding", n.FileName, i, n, result.Data.QueryName)
+		m.augmentFile("finding", n.FileName, i, n.Line, "Finding "+result.Data.QueryName)
 	}
 
 	for file, source := range m.files {
@@ -72,29 +72,25 @@ func (m *MCPBackend) addFile(scanId, filePath string) error {
 		return nil
 	}
 
-	fileSource, err := m.cx1client.GetScannedFileSourceByID(scanId, filePath)
+	fileSource, err := m.Cx1Client.GetScannedFileSourceByID(scanId, filePath)
 	if err != nil {
 		return fmt.Errorf("failed to get file source: %v", err)
 	}
-	sources := FileSource{
-		code:    strings.Split(strings.ReplaceAll(fileSource, "\r\n", "\n"), "\n"),
-		Sources: make(map[string]struct{}),
-		Augs:    make(map[uint64][]FileAug),
-	}
+	sources := NewFileSource(fileSource)
 	m.files[filePath] = &sources
 	return nil
 }
 
-func (m *MCPBackend) augmentFile(source, filePath string, nodeNumber int, node Cx1ClientGo.ScanSASTResultNodes, queryName string) {
+func (m *MCPBackend) augmentFile(source, filePath string, nodeNumber int, line uint64, queryName string) {
 	if _, ok := m.files[filePath]; !ok {
 		return
 	}
 
-	if uint64(len((*m.files[filePath]).code)) <= node.Line {
+	if uint64(len((*m.files[filePath]).code)) <= line {
 		return
 	}
 
-	m.files[filePath].Augment(source, fmt.Sprintf("Finding %s step %d", queryName, nodeNumber+1), node.Line)
+	m.files[filePath].Augment(source, fmt.Sprintf("%s step %d", queryName, nodeNumber+1), line)
 }
 
 func (m *MCPBackend) getZip() []byte {
@@ -134,16 +130,16 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	var product, tenant, application, project *Cx1ClientGo.SASTQuery
 
 	product = m.Queries.GetQueryByLevelAndName(
-		m.cx1client.QueryTypeProduct(),
-		m.cx1client.QueryTypeProduct(),
+		m.Cx1Client.QueryTypeProduct(),
+		m.Cx1Client.QueryTypeProduct(),
 		language,
 		group,
 		name,
 	)
 
 	tenant = m.Queries.GetQueryByLevelAndName(
-		m.cx1client.QueryTypeTenant(),
-		m.cx1client.QueryTypeTenant(),
+		m.Cx1Client.QueryTypeTenant(),
+		m.Cx1Client.QueryTypeTenant(),
 		language,
 		group,
 		name,
@@ -154,7 +150,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	}
 
 	if product != nil {
-		q, err := m.cx1client.GetAuditSASTQueryByKey(m.session, product.EditorKey)
+		q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, product.EditorKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get product query source: %v", err)
 		}
@@ -162,7 +158,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	}
 
 	if tenant != nil {
-		q, err := m.cx1client.GetAuditSASTQueryByKey(m.session, tenant.EditorKey)
+		q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, tenant.EditorKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tenant query source: %v", err)
 		}
@@ -171,13 +167,13 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 
 	if m.application != nil {
 		application = m.Queries.GetQueryByLevelAndID(
-			m.cx1client.QueryTypeApplication(),
+			m.Cx1Client.QueryTypeApplication(),
 			m.application.ApplicationID,
 			m.Result.Data.QueryID,
 		)
 
 		if application != nil {
-			q, err := m.cx1client.GetAuditSASTQueryByKey(m.session, application.EditorKey)
+			q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, application.EditorKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get application query source: %v", err)
 			}
@@ -187,12 +183,12 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 
 	if m.project != nil {
 		project = m.Queries.GetQueryByLevelAndID(
-			m.cx1client.QueryTypeProject(),
+			m.Cx1Client.QueryTypeProject(),
 			m.project.ProjectID,
 			m.Result.Data.QueryID,
 		)
 		if project != nil {
-			q, err := m.cx1client.GetAuditSASTQueryByKey(m.session, project.EditorKey)
+			q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, project.EditorKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get project query source: %v", err)
 			}
@@ -214,7 +210,7 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 
 	result.WriteString(fmt.Sprintf("Source code: \n```csharp\n%s\n```\n", query.Source))
 
-	open, base, product := query.GetDependencies(&m.Queries)
+	open, base, _ := query.GetDependencies(&m.Queries)
 	if len(open)+len(base) > 0 {
 		result.WriteString("The following queries are called by this query and can be edited or overridden:\n")
 		for _, q := range open {
@@ -225,11 +221,13 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 		}
 	}
 
-	if len(product) > 0 {
-		result.WriteString("The following product-defined functions are called and cannot be edited or overridden:\n- ")
-		result.WriteString(strings.Join(product, "\n- "))
-		result.WriteString("\n")
-	}
+	/*
+		if len(product) > 0 {
+			result.WriteString("The following product-defined functions are called and cannot be edited or overridden:\n- ")
+			result.WriteString(strings.Join(product, "\n- "))
+			result.WriteString("\n")
+		}
+	*/
 
 	return result.String()
 }
@@ -295,7 +293,7 @@ func (m *MCPBackend) sessionRefresh() error {
 		return m.CreateAuditSession()
 	}
 
-	err := m.cx1client.AuditSessionKeepAlive(m.session)
+	err := m.Cx1Client.AuditSessionKeepAlive(m.session)
 	if err == nil {
 		return nil
 	}
@@ -306,7 +304,7 @@ func (m *MCPBackend) sessionRefresh() error {
 
 func (m *MCPBackend) endSession() {
 	if m.session != nil {
-		err := m.cx1client.DeleteAuditSession(m.session)
+		err := m.Cx1Client.DeleteAuditSession(m.session)
 		if err != nil {
 			m.logger.Errorf("failed to terminate audit session: %v", err)
 		}

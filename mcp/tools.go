@@ -2,6 +2,10 @@ package mcp
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/cxpsemea/Cx1ClientGo"
 )
 
 // given a full path to a finding, eg: https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName
@@ -95,18 +99,117 @@ func (m *MCP) CheckOriginalFinding() string {
 
 // runs an existing query and returns the results (which may be multiple dataflow paths)
 func (m *MCP) RunQuery(language, group, query string) string {
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	if executedQuery == nil {
+		return "The query %s.%s.%s does not exist"
+	}
 
-	return ""
+	_, err := m.backend.GetQuerySource(executedQuery)
+	if err != nil {
+		return "Failed to retrieve the query's current source code"
+	}
+
+	results, err := m.backend.RunQuery(executedQuery, executedQuery.Source)
+	if err != nil {
+		return fmt.Sprintf("Failed to run the query in the audit session: %s", err)
+	}
+
+	return m.processAuditResults(executedQuery, &results)
 }
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
 func (m *MCP) TestQuery(language, group, query, code string) string {
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	if executedQuery == nil {
+		return "The query %s.%s.%s does not exist"
+	}
+	if executedQuery.Level != m.backend.Cx1Client.QueryTypeProject() {
+		q, err := m.backend.CreateOverride(executedQuery)
+		if err != nil {
+			return fmt.Sprintf("Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
+		}
+		executedQuery = q
+	}
 
-	return ""
+	results, err := m.backend.RunQuery(executedQuery, code)
+	if err != nil {
+		return fmt.Sprintf("Failed to run the query in the audit session: %s", err)
+	}
+
+	return m.processAuditResults(executedQuery, &results)
 }
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
 func (m *MCP) SaveQuery(language, group, query string) string {
 
 	return ""
+}
+
+func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
+	response := strings.Builder{}
+	for _, f := range results.FailedQueries {
+		qid, _ := strconv.ParseUint(f.QueryID, 10, 64)
+		q := m.backend.Queries.GetQueryByID(qid)
+		if q != nil {
+			fmt.Fprintf(&response, "Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
+			response.WriteString("\n")
+		} else {
+			fmt.Fprintf(&response, "Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
+			response.WriteString("\n")
+		}
+	}
+
+	if len(results.Results) > 0 {
+		for _, r := range results.Results {
+			vulns, err := m.backend.GetRunResults(r)
+			if err != nil {
+				fmt.Fprintf(&response, "Failed to get run result %s: %s", r.RunID, err)
+				response.WriteString("\n")
+			} else {
+				parts := strings.Split(r.Title, " ")
+				if len(parts) >= 1 {
+					queryName := parts[0]
+					var runQuery *Cx1ClientGo.SASTQuery
+					if strings.EqualFold(queryName, executedQuery.Name) {
+						runQuery = executedQuery
+					} else {
+						productQuery := m.backend.Queries.FindQuery(m.backend.Cx1Client.QueryTypeProduct(), "", executedQuery.Language, queryName, 0)
+						if productQuery != nil {
+							runQuery = productQuery
+						} else {
+							tenantQuery := m.backend.Queries.FindQuery(m.backend.Cx1Client.QueryTypeTenant(), "", executedQuery.Language, queryName, 0)
+							if tenantQuery != nil {
+								runQuery = tenantQuery
+							} else {
+								m.logger.Errorf("Failed to find %s query %s", executedQuery.Language, queryName)
+							}
+						}
+					}
+
+					if runQuery != nil {
+						queryName = fmt.Sprintf("%s.%s.%s", runQuery.Language, runQuery.Group, runQuery.Name)
+					} else {
+						queryName = "Unknown query " + queryName
+					}
+
+					fmt.Fprintf(&response, "Got %d results for run %s", len(vulns), r.RunID)
+					response.WriteString("\n")
+					for i, v := range vulns {
+						fmt.Fprintf(&response, "%d: %+v", i, v)
+						response.WriteString("\n")
+						if err := m.backend.VulnAugment(queryName, v); err != nil {
+							m.logger.Errorf("Failed to augment code with %s vuln %s", queryName, v)
+						}
+					}
+				} else {
+					m.logger.Infof("Failed to get query from title: %s", r.Title)
+				}
+			}
+		}
+	}
+
+	response.WriteString("\nSource code:\n")
+	response.WriteString(m.GetCodeSnippets())
+
+	return response.String()
 }
