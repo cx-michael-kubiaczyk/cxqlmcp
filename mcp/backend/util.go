@@ -1,8 +1,6 @@
 package backend
 
 import (
-	"archive/zip"
-	"bytes"
 	"fmt"
 	"net/url"
 	"strings"
@@ -52,23 +50,28 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 	m.logger.Debugf("Result: %+v", result)
 	for i, n := range result.Data.Nodes {
 		m.logger.Debugf("Node %d: %+v", i, n)
-		if err := m.addFile(sid, n.FileName); err != nil {
-			return fmt.Errorf("failed to add file: %v", err)
+		if !m.ScanSources.HasFile(n.FileName) {
+			fileSource, err := m.Cx1Client.GetScannedFileSourceByID(sid, n.FileName)
+			if err != nil {
+				return fmt.Errorf("failed to get file source: %v", err)
+			}
+			m.ScanSources.AddFile(n.FileName, fileSource)
 		}
 
-		m.augmentFile("finding", n.FileName, i, n.Line, "Finding "+result.Data.QueryName)
+		m.ScanSources.AugmentFile(n.FileName, n.Line, AugSrc_Finding(result.Data.QueryName), fmt.Sprintf("step %d", i))
 	}
 
-	for file, source := range m.files {
+	/*for file, source := range m.ScanSources.Files {
 		m.logger.Debugf("File: %s\n\n%s\n", file, strings.Join(source.code, "\n"))
-	}
+	}*/
 
 	return nil
 
 }
 
+/*
 func (m *MCPBackend) addFile(scanId, filePath string) error {
-	if _, ok := m.files[filePath]; ok {
+	if _, ok := m.ScanSources.Files[filePath]; ok {
 		return nil
 	}
 
@@ -76,23 +79,12 @@ func (m *MCPBackend) addFile(scanId, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get file source: %v", err)
 	}
-	sources := NewFileSource(fileSource)
-	m.files[filePath] = &sources
+	m.ScanSources.AddFile(filePath, fileSource)
 	return nil
 }
+*/
 
-func (m *MCPBackend) augmentFile(source, filePath string, nodeNumber int, line uint64, queryName string) {
-	if _, ok := m.files[filePath]; !ok {
-		return
-	}
-
-	if uint64(len((*m.files[filePath]).code)) <= line {
-		return
-	}
-
-	m.files[filePath].Augment(source, fmt.Sprintf("%s step %d", queryName, nodeNumber+1), line)
-}
-
+/*
 func (m *MCPBackend) getZip() []byte {
 	buf := new(bytes.Buffer)
 	w := zip.NewWriter(buf)
@@ -122,6 +114,7 @@ func (m *MCPBackend) getZip() []byte {
 	}
 	return buf.Bytes()
 }
+*/
 
 func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
 	if m.project == nil {
@@ -324,4 +317,21 @@ func findingsEqual(r *Cx1ClientGo.ScanSASTResult, v Cx1ClientGo.QueryVulnerabili
 
 	}
 	return false
+}
+
+func (m *MCPBackend) UpdateQueryCollection() error {
+	m.logger.Debugf("Updating query collection")
+	qc, err := m.Cx1Client.GetQueriesByLevelID(m.Cx1Client.QueryTypeProject(), m.project.ProjectID)
+	if err != nil {
+		return fmt.Errorf("failed to get queries: %v", err)
+	}
+	m.Queries.AddCollection(&qc)
+
+	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.project.ProjectID)
+	if err != nil {
+		return fmt.Errorf("failed to get audit queries: %v", err)
+	}
+
+	m.Queries.AddCollection(&aq)
+	return nil
 }

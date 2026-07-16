@@ -10,8 +10,8 @@ func TestFilesourceAugment(t *testing.T) {
 
 	fs := FileSource{
 		code:    sourceCode,
-		Sources: make(map[string]struct{}),
-		Augs:    make(map[uint64][]FileAug),
+		Sources: make(map[AugmentSource]struct{}),
+		Augs:    make(map[uint64]map[AugmentSource][]string),
 	}
 
 	expect := strings.Join(sourceCode, "\n") + "\n"
@@ -20,9 +20,9 @@ func TestFilesourceAugment(t *testing.T) {
 		t.Errorf("Unchanged source code does not match expected value.\n%s\n =/= \n%s", actual, expect)
 	}
 
-	fs.Augment("finding", "Finding X - step 1", 2)
-	fs.Augment("finding", "Finding X - step 2", 1)
-	expectedCode1 := []string{"This is // Finding X - step 2", "a few lines // Finding X - step 1", "of code"}
+	fs.Augment("Finding X", "step 1", 2)
+	fs.Augment("Finding X", "step 2", 1)
+	expectedCode1 := []string{"This is // Finding X: step 2", "a few lines // Finding X: step 1", "of code"}
 	expect = strings.Join(expectedCode1, "\n") + "\n"
 	actual = fs.Code()
 
@@ -30,8 +30,8 @@ func TestFilesourceAugment(t *testing.T) {
 		t.Errorf("Source code with 1 augment does not match expected value.\n%s\n =/= \n%s", actual, expect)
 	}
 
-	fs.Augment("finding", "Result 1", 1)
-	expectedCode2 := []string{"This is // Finding X - step 2; Result 1", "a few lines // Finding X - step 1", "of code"}
+	fs.Augment("Audit Y", "step 1", 1)
+	expectedCode2 := []string{"This is // Finding X: step 2; Audit Y: step 1", "a few lines // Finding X: step 1", "of code"}
 	expect = strings.Join(expectedCode2, "\n") + "\n"
 	actual = fs.Code()
 

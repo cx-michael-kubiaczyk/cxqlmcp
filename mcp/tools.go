@@ -2,10 +2,10 @@ package mcp
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
+	"github.com/cxpsemea/cxqlmcp/mcp/backend"
 )
 
 // given a full path to a finding, eg: https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName
@@ -147,16 +147,36 @@ func (m *MCP) SaveQuery(language, group, query string) string {
 
 func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
 	response := strings.Builder{}
-	for _, f := range results.FailedQueries {
-		qid, _ := strconv.ParseUint(f.QueryID, 10, 64)
-		q := m.backend.Queries.GetQueryByID(qid)
-		if q != nil {
-			fmt.Fprintf(&response, "Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
-			response.WriteString("\n")
-		} else {
-			fmt.Fprintf(&response, "Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
-			response.WriteString("\n")
+
+	if len(results.FailedQueries) > 0 {
+		//cs := backend.NewCodeSet()
+		for _, f := range results.FailedQueries {
+			q, err := m.backend.UpdateQueryByKey(f.QueryID)
+			if err != nil {
+				fmt.Fprintf(&response, "Failed to retrieve query with key %s: %s", f.QueryID, err)
+				response.WriteString("\n")
+			}
+			var fs backend.FileSource
+			if q.EditorKey == executedQuery.EditorKey {
+				fs = backend.NewFileSource(m.backend.TempCode)
+			} else {
+				fs = backend.NewFileSource(q.Source)
+			}
+			if q != nil {
+				m.logger.Debugf("Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
+				for _, e := range f.Errors {
+					fs.Augment("audit", "Error: "+e.Message, e.Line)
+				}
+
+				fmt.Fprintf(&response, "The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
+				response.WriteString("\n")
+				response.WriteString(fs.Code())
+			} else {
+				fmt.Fprintf(&response, "Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
+				response.WriteString("\n")
+			}
 		}
+
 	}
 
 	if len(results.Results) > 0 {
@@ -192,7 +212,7 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 						queryName = "Unknown query " + queryName
 					}
 
-					fmt.Fprintf(&response, "Got %d results for run %s", len(vulns), r.RunID)
+					fmt.Fprintf(&response, "Query %s.%s.%s ran with %d results.", runQuery.Language, runQuery.Group, runQuery.Name, len(vulns))
 					response.WriteString("\n")
 					for i, v := range vulns {
 						fmt.Fprintf(&response, "%d: %+v", i, v)
@@ -206,10 +226,10 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 				}
 			}
 		}
-	}
 
-	response.WriteString("\nSource code:\n")
-	response.WriteString(m.GetCodeSnippets())
+		response.WriteString("\nSource code:\n")
+		response.WriteString(m.GetCodeSnippets())
+	}
 
 	return response.String()
 }

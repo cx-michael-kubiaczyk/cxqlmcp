@@ -27,7 +27,7 @@ func main() {
 	LogLevel := flag.String("log", "INFO", "Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL")
 
 	httpClient := &http.Client{}
-	if false {
+	if true {
 		proxyURL, _ := url.Parse("http://127.0.0.1:8080")
 		transport := &http.Transport{}
 		transport.Proxy = http.ProxyURL(proxyURL)
@@ -133,57 +133,62 @@ func testXSS(server *mcp.MCP, logger *logrus.Logger) {
 		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/e25a6a86-2d86-4b1b-8d50-6c6f706decdd/0f562295-d7a8-49d6-bd37-82177647633b?resultId=wta7MY4iw%2BJ3rxS9fiHBXIHukys%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"),
 		breaker,
 	)
+	/*
+		logger.Infof("HLD:\n%s\n%s", server.HLD, breaker)
 
-	logger.Infof("HLD:\n%s\n%s", server.HLD, breaker)
+		logger.Infof("Finding details:\n%s\n%s",
+			server.GetFindingDetails(),
+			breaker,
+		)
 
-	logger.Infof("Finding details:\n%s\n%s",
-		server.GetFindingDetails(),
-		breaker,
-	)
+		logger.Infof("Code snippets:\n%s\n%s",
+			server.GetCodeSnippets(),
+			breaker,
+		)
 
-	logger.Infof("Code snippets:\n%s\n%s",
-		server.GetCodeSnippets(),
-		breaker,
-	)
+		logger.Infof("Query info:\n%s\n%s",
+			server.GetQueryInfo("Java", "Java_High_Risk", "Reflected_XSS"),
+			breaker,
+		)
 
-	logger.Infof("Query info:\n%s\n%s",
-		server.GetQueryInfo("Java", "Java_High_Risk", "Reflected_XSS"),
-		breaker,
-	)
+		logger.Infof("Run sub-query Find_ReflectedXSS:\n%s\n%s",
+			server.RunQuery("Java", "General", "Find_ReflectedXSS"),
+			breaker,
+		)
 
-	logger.Infof("Run sub-query Find_ReflectedXSS:\n%s\n%s",
-		server.RunQuery("Java", "General", "Find_ReflectedXSS"),
-		breaker,
-	)
+		logger.Infof("Query info:\n%s\n%s",
+			server.GetQueryInfo("Java", "General", "Find_ReflectedXSS"),
+			breaker,
+		)
 
-	logger.Infof("Query info:\n%s\n%s",
-		server.GetQueryInfo("Java", "General", "Find_ReflectedXSS"),
-		breaker,
-	)
+		logger.Infof("Run sub-query Find_XSS_Sanitize:\n%s\n%s",
+			server.RunQuery("Java", "General", "Find_XSS_Sanitize"),
+			breaker,
+		)
 
-	logger.Infof("Run sub-query Find_XSS_Sanitize:\n%s\n%s",
-		server.RunQuery("Java", "General", "Find_XSS_Sanitize"),
-		breaker,
-	)
-
-	logger.Infof("Query info:\n%s\n%s",
-		server.GetQueryInfo("Java", "General", "Find_XSS_Sanitize"),
-		breaker,
-	)
-	logger.Infof("Query info:\n%s\n%s",
-		server.GetQueryInfo("Java", "General", "Find_Full_XSS_Sanitize"),
-		breaker,
-	)
+		logger.Infof("Query info:\n%s\n%s",
+			server.GetQueryInfo("Java", "General", "Find_XSS_Sanitize"),
+			breaker,
+		)
+		logger.Infof("Query info:\n%s\n%s",
+			server.GetQueryInfo("Java", "General", "Find_Full_XSS_Sanitize"),
+			breaker,
+		)
+	*/
 	logger.Infof("Run sub-query Find_Full_XSS_Sanitize:\n%s\n%s",
 		server.RunQuery("Java", "General", "Find_Full_XSS_Sanitize"),
 		breaker,
 	)
 	logger.Infof("Test error in custom Find_Full_XSS_Sanitize:\n%s\n%s",
-		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_();\nresult.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));\n`),
+		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_();
+result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
+`),
 		breaker,
 	)
 	logger.Infof("Test custom Find_Full_XSS_Sanitize:\n%s\n%s",
-		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_Full_XSS_Sanitize();\nresult.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));\n`),
+		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_Full_XSS_Sanitize();
+result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
+`),
 		breaker,
 	)
 }

@@ -2,7 +2,6 @@ package backend
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 	"github.com/sirupsen/logrus"
@@ -17,7 +16,8 @@ type MCPBackend struct {
 	Vuln         *Cx1ClientGo.QueryVulnerability
 	session      *Cx1ClientGo.AuditSession
 	logger       *logrus.Logger
-	files        map[string]*FileSource // filename: code
+	ScanSources  CodeSet
+	TempCode     string
 	Queries      Cx1ClientGo.SASTQueryCollection
 	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
 	targetQuery  []*Cx1ClientGo.SASTQuery
@@ -26,8 +26,9 @@ type MCPBackend struct {
 func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBackend {
 	return MCPBackend{Cx1Client: cx1client,
 		logger:       logger,
-		files:        make(map[string]*FileSource),
-		descriptions: make(map[uint64]Cx1ClientGo.SASTQueryDescription)}
+		ScanSources:  NewCodeSet(),
+		descriptions: make(map[uint64]Cx1ClientGo.SASTQueryDescription),
+	}
 }
 
 func (m *MCPBackend) Initialize(path string) error {
@@ -42,7 +43,6 @@ func (m *MCPBackend) Initialize(path string) error {
 	if err != nil {
 		return err
 	}
-	m.files = make(map[string]*FileSource)
 
 	project, err := m.Cx1Client.GetProjectByID(pid)
 	if err != nil {
@@ -87,12 +87,9 @@ func (m *MCPBackend) CreateAuditSession() error {
 	}
 	m.session = &session
 
-	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.project.ProjectID)
-	if err != nil {
-		return fmt.Errorf("failed to get queries: %v", err)
+	if err = m.UpdateQueryCollection(); err != nil {
+		return err
 	}
-
-	m.Queries.AddCollection(&aq)
 
 	query := m.Queries.GetQueryByID(m.Result.Data.QueryID)
 	if query == nil {
@@ -161,11 +158,14 @@ func (m *MCPBackend) GetQuerySource(query *Cx1ClientGo.SASTQuery) (string, error
 }
 
 func (m *MCPBackend) RunQuery(query *Cx1ClientGo.SASTQuery, source string) (Cx1ClientGo.QueryRun, error) {
+	if query == nil {
+		return Cx1ClientGo.QueryRun{}, fmt.Errorf("nil query provided")
+	}
 	err := m.sessionRefresh()
 	if err != nil {
 		return Cx1ClientGo.QueryRun{}, fmt.Errorf("failed to refresh audit session: %v", err)
 	}
-
+	m.TempCode = source
 	return m.Cx1Client.RunSASTQuery(m.session, query, source)
 }
 
@@ -184,31 +184,44 @@ func (m *MCPBackend) GetQueryDescription(queryId uint64) (Cx1ClientGo.SASTQueryD
 }
 
 func (m MCPBackend) GetCodeSnippets() string {
-	var str strings.Builder
-	for _, file := range m.files {
-		str.WriteString(file.Code())
-		str.WriteString("\n")
-	}
-	return str.String()
+	return m.ScanSources.GetSources()
 }
 
 func (m *MCPBackend) VulnAugment(query string, vuln Cx1ClientGo.QueryVulnerability) error {
 	for i, v := range vuln.Nodes {
-		if err := m.addFile(m.scan.ScanID, v.FileID); err != nil {
-			return err
+		if !m.ScanSources.HasFile(v.FileID) {
+			fileSource, err := m.Cx1Client.GetScannedFileSourceByID(m.scan.ScanID, v.FileID)
+			if err != nil {
+				return fmt.Errorf("failed to get file source: %v", err)
+			}
+			m.ScanSources.AddFile(v.FileID, fileSource)
 		}
-
-		m.augmentFile("audit", v.FileID, i, v.Line, "Query "+query)
+		m.ScanSources.AugmentFile(v.FileID, v.Line, AugSrc_Audit(query), fmt.Sprintf("step %d", i))
 	}
 	return nil
 }
 
-func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.SASTQuery, error) {
-	m.sessionRefresh()
-	q, err := m.Cx1Client.CreateSASTQueryOverride(m.session, m.Cx1Client.QueryTypeProject(), query)
+func (m *MCPBackend) UpdateQueryByKey(editorKey string) (*Cx1ClientGo.SASTQuery, error) {
+	q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, editorKey)
 	if err != nil {
 		return nil, err
 	}
+	m.Queries.UpdateNewQuery(&q)
 	m.Queries.AddQuery(q)
+	return m.Queries.GetQueryByEditorKey(editorKey), nil
+}
+
+func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.SASTQuery, error) {
+	m.sessionRefresh()
+	_, err := m.Cx1Client.CreateSASTQueryOverride(m.session, m.Cx1Client.QueryTypeProject(), query)
+	if err != nil {
+		return nil, err
+	}
+
+	err = m.UpdateQueryCollection()
+	if err != nil {
+		return nil, err
+	}
+
 	return m.Queries.GetQueryByLevelAndID(m.Cx1Client.QueryTypeProject(), m.project.ProjectID, query.QueryID), nil
 }
