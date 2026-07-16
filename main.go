@@ -21,10 +21,13 @@ func main() {
 	myformatter.TimestampFormat = "2006-01-02 15:04:05.000"
 	myformatter.LogFormat = "[%lvl%][%time%] %msg%\n"
 	logger.SetFormatter(myformatter)
-	logger.SetOutput(os.Stdout)
+	// Use stderr so logs don't corrupt the MCP stdio transport on stdout.
+	logger.SetOutput(os.Stderr)
 
 	logger.Info("Starting")
 	LogLevel := flag.String("log", "INFO", "Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL")
+	testMode := flag.String("test", "", "Run test harness instead of MCP server (hsts|xss)")
+	flag.Parse()
 
 	httpClient := &http.Client{}
 	if true {
@@ -37,7 +40,6 @@ func main() {
 	}
 
 	cx1client, err := Cx1ClientGo.NewClient(httpClient, logger)
-
 	if err != nil {
 		logger.Fatalf("Error creating client: %s", err)
 	}
@@ -45,86 +47,41 @@ func main() {
 
 	switch strings.ToUpper(*LogLevel) {
 	case "TRACE":
-		logger.Info("Setting log level to TRACE")
 		logger.SetLevel(logrus.TraceLevel)
 	case "DEBUG":
-		logger.Info("Setting log level to DEBUG")
 		logger.SetLevel(logrus.DebugLevel)
 	case "INFO":
-		logger.Info("Setting log level to INFO")
 		logger.SetLevel(logrus.InfoLevel)
 	case "WARNING":
-		logger.Info("Setting log level to WARNING")
 		logger.SetLevel(logrus.WarnLevel)
 	case "ERROR":
-		logger.Info("Setting log level to ERROR")
 		logger.SetLevel(logrus.ErrorLevel)
 	case "FATAL":
-		logger.Info("Setting log level to FATAL")
 		logger.SetLevel(logrus.FatalLevel)
-	default:
-		logger.Info("Log level set to default: INFO")
 	}
 
 	server := mcp.NewMCP(cx1client, logger)
-	err = server.Start()
-	if err != nil {
-		logger.Errorf("Error running server: %s", err)
+	defer server.Shutdown()
+
+	if *testMode != "" {
+		runTest(server, logger, *testMode)
 		return
 	}
 
-	defer server.Shutdown()
-
-	runTest(server, logger)
-
-	logger.Infof("Done")
+	if err := server.Start(); err != nil {
+		logger.Errorf("Error running MCP server: %s", err)
+	}
 }
 
-func runTest(server *mcp.MCP, logger *logrus.Logger) {
-	/*
-		Typical harness-driven flow:
-		Harness -> MCP: create session (from url)
-			MCP: create session
-			MCP: get query info
-			MCP: get code
-			MCP: get finding details
-			MCP: add finding details (dataflow path) as comments to code snippets
-		<-- MCP: prompt containing:
-				 - the explanation of the SAST system & query override process,
-				 - current finding details (description, recommendation),
-				 - code snippets with the dataflow path
-				 - the CxQL query that was used to find the issue
-		LLM -> MCP: run sub-query X
-			MCP: trigger query and get results (which may be multiple dataflow paths)
-			MCP: add results summaries (not full dataflow, just first+last nodes) as comments to code snippets
-		<-- MCP: prompt containing:
-				 - the explanation of the SAST system & query override process,
-				 - current finding details (description, recommendation),
-				 - code snippets with the dataflow path + sub-query results summaries
-			 	 - the CxQL query that was used to find the issue
-				 - the CxQL sub-query that was run
-		LLM: run updated sub-query X
-			MCP: trigger updated query and get results (which may be multiple dataflow paths)
-			MCP: add results summaries (not full dataflow, just first+last nodes) as comments to code snippets
-		<-- MCP: prompt containing:
-				 - the explanation of the SAST system & query override process,
-				 - current finding details (description, recommendation),
-				 - code snippets with the dataflow path + sub-query results summaries
-				 - the CxQL query that was used to find the issue
-				 - the updated CxQL sub-query that was run
-		Harness -> LLM: was this useful? (yes/no)
-		<-- LLM: yes/no (save or don't save)
-		Harness -> MCP: save updated sub-query or not
-		LLM: decide if more queries should be changed, or run the original query again to check the status
-		     - trigger update tools or "check if finding present" tool
-			 -
-
-
-
-
-		This test is a mock-harness flow
-	*/
-	testXSS(server, logger)
+func runTest(server *mcp.MCP, logger *logrus.Logger, mode string) {
+	switch strings.ToLower(mode) {
+	case "xss":
+		testXSS(server, logger)
+	case "hsts":
+		testHSTS(server, logger)
+	default:
+		logger.Errorf("Unknown test mode %q (use 'xss' or 'hsts')", mode)
+	}
 }
 
 func testXSS(server *mcp.MCP, logger *logrus.Logger) {
@@ -192,25 +149,17 @@ result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 		breaker,
 	)
 }
+
 func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	logger.Infof("CreateSessionFromURL:\n%s\n",
 		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"),
 	)
-
 	logger.Infof("HLD:\n%s\n", server.HLD)
-
-	logger.Infof("Finding details:\n%s\n",
-		server.GetFindingDetails(),
-	)
-
-	logger.Infof("Code snippets:\n%s\n",
-		server.GetCodeSnippets(),
-	)
-
+	logger.Infof("Finding details:\n%s\n", server.GetFindingDetails())
+	logger.Infof("Code snippets:\n%s\n", server.GetCodeSnippets())
 	logger.Infof("Query info:\n%s\n",
 		server.GetQueryInfo("JavaScript", "JavaScript_Medium_Threat", "Missing_HSTS_Header"),
 	)
-
 	logger.Infof("Run sub-query Find_HSTS_Sanitize:\n%s\n",
 		server.RunQuery("JavaScript", "General", "Find_HSTS_Sanitize"),
 	)
