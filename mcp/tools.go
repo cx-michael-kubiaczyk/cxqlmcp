@@ -32,12 +32,10 @@ func (m *MCP) CreateSessionFromURL(path string) string {
 	return "The session was created successfully and the finding is present."
 }
 
-/*
-returns the current state:
-  - current finding details (description, recommendation),
-  - code snippets with the dataflow path
-  - the CxQL query that was used to find the issue
-*/
+// returns the current state:
+//   - current finding details (description, recommendation),
+//   - code snippets with the dataflow path
+//   - the CxQL query that was used to find the issue
 func (m *MCP) GetCurrentState() string {
 	result := ""
 	result += m.GetFindingDetails() + "\n"
@@ -57,7 +55,7 @@ func (m *MCP) GetFindingDetails() string {
 	if err != nil {
 		return fmt.Sprintf("Error: Failed to get finding details: %s", err)
 	}
-	return fmt.Sprintf("Finding %s.%s.%s details:\nDescription: %s\nRisk: %s\nRecommendation: %s", m.backend.Result.Data.LanguageName, m.backend.Result.Data.Group, m.backend.Result.Data.QueryName, details.ResultDescription, details.Risk, details.GeneralRecommendations)
+	return fmt.Sprintf("A false-positive finding %s.%s.%s was found in the source code.\nDescription: %s\nRisk: %s\nRecommendation: %s", m.backend.Result.Data.LanguageName, m.backend.Result.Data.Group, m.backend.Result.Data.QueryName, details.ResultDescription, details.Risk, details.GeneralRecommendations)
 }
 
 // returns the source code involved in the finding or query dataflow
@@ -68,6 +66,11 @@ func (m *MCP) GetCodeSnippets() string {
 // returns a list of files + lines matching the search string, eg /src/somefile.java:123 this is the line of code
 func (m *MCP) SearchCode(substring string) string {
 	return ""
+}
+
+// return the high-level description of the process
+func (m *MCP) GetHLD() string {
+	return m.HLD
 }
 
 // returns the source code along with any comments added by the MCP process (dataflow markers)
@@ -86,7 +89,7 @@ func (m *MCP) GetQueryInfo(language, group, name string) string {
 	return m.backend.FormatQueryHierarchy(queries)
 }
 
-// checks i the original finding is found in the audit session or not
+// checks if the original finding is found in the audit session or not
 func (m *MCP) CheckOriginalFinding() string {
 	present, err := m.backend.CheckFindingStatus()
 	if err != nil {
@@ -102,17 +105,17 @@ func (m *MCP) CheckOriginalFinding() string {
 func (m *MCP) RunQuery(language, group, query string) string {
 	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
 	if executedQuery == nil {
-		return "The query %s.%s.%s does not exist"
+		return "Error: The query %s.%s.%s does not exist"
 	}
 
 	_, err := m.backend.GetQuerySource(executedQuery)
 	if err != nil {
-		return "Failed to retrieve the query's current source code"
+		return "Error: Failed to retrieve the query's current source code"
 	}
 
 	results, err := m.backend.RunQuery(executedQuery, executedQuery.Source)
 	if err != nil {
-		return fmt.Sprintf("Failed to run the query in the audit session: %s", err)
+		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
 	return m.processAuditResults(executedQuery, &results)
@@ -122,19 +125,19 @@ func (m *MCP) RunQuery(language, group, query string) string {
 func (m *MCP) TestQuery(language, group, query, code string) string {
 	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
 	if executedQuery == nil {
-		return "The query %s.%s.%s does not exist"
+		return "Error: The query %s.%s.%s does not exist"
 	}
 	if executedQuery.Level != m.backend.Cx1Client.QueryTypeProject() {
 		q, err := m.backend.CreateOverride(executedQuery)
 		if err != nil {
-			return fmt.Sprintf("Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
+			return fmt.Sprintf("Error: Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
 		}
 		executedQuery = q
 	}
 
 	results, err := m.backend.RunQuery(executedQuery, code)
 	if err != nil {
-		return fmt.Sprintf("Failed to run the query in the audit session: %s", err)
+		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
 	return m.processAuditResults(executedQuery, &results)
@@ -154,7 +157,7 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 		for _, f := range results.FailedQueries {
 			q, err := m.backend.UpdateQueryByKey(f.QueryID)
 			if err != nil {
-				fmt.Fprintf(&response, "Failed to retrieve query with key %s: %s", f.QueryID, err)
+				fmt.Fprintf(&response, "Error: Failed to retrieve query with key %s: %s", f.QueryID, err)
 				response.WriteString("\n")
 			}
 			var fs backend.FileSource
@@ -169,15 +172,14 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 					fs.Augment("audit", "Error: "+e.Message, e.Line)
 				}
 
-				fmt.Fprintf(&response, "The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
+				fmt.Fprintf(&response, "Error: The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
 				response.WriteString("\n")
 				response.WriteString(fs.Code())
 			} else {
-				fmt.Fprintf(&response, "Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
+				fmt.Fprintf(&response, "Error: Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
 				response.WriteString("\n")
 			}
 		}
-
 	}
 
 	if len(results.Results) > 0 {
@@ -208,7 +210,7 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 					}
 
 					if runQuery != nil {
-						queryName = fmt.Sprintf("%s.%s.%s", runQuery.Language, runQuery.Group, runQuery.Name)
+						queryName = runQuery.Name
 					} else {
 						queryName = "Unknown query " + queryName
 					}
@@ -216,9 +218,9 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 					fmt.Fprintf(&response, "Query %s.%s.%s ran with %d results.", runQuery.Language, runQuery.Group, runQuery.Name, len(vulns))
 					response.WriteString("\n")
 					for i, v := range vulns {
-						fmt.Fprintf(&response, "%d: %+v", i, v)
-						response.WriteString("\n")
-						if err := m.backend.VulnAugment(queryName, v); err != nil {
+						//fmt.Fprintf(&response, "%d: %+v", i, v)
+						//response.WriteString("\n")
+						if err := m.backend.VulnAugment(i, queryName, v); err != nil {
 							m.logger.Errorf("Failed to augment code with %s vuln %s", queryName, v)
 						}
 					}

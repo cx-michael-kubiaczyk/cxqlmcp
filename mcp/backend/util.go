@@ -58,7 +58,7 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 			m.ScanSources.AddFile(n.FileName, fileSource)
 		}
 
-		m.ScanSources.AugmentFile(n.FileName, n.Line, AugSrc_Finding(result.Data.QueryName), fmt.Sprintf("step %d", i))
+		m.ScanSources.AugmentFile(n.FileName, n.Line, AugSrc_Finding(result.Data.QueryName), fmt.Sprintf("step %d", i+1))
 	}
 
 	/*for file, source := range m.ScanSources.Files {

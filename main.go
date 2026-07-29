@@ -27,10 +27,9 @@ func main() {
 	logger.Info("Starting")
 	LogLevel := flag.String("log", "INFO", "Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL")
 	testMode := flag.String("test", "", "Run test harness instead of MCP server (hsts|xss)")
-	flag.Parse()
 
 	httpClient := &http.Client{}
-	if true {
+	if false {
 		proxyURL, _ := url.Parse("http://127.0.0.1:8080")
 		transport := &http.Transport{}
 		transport.Proxy = http.ProxyURL(proxyURL)
@@ -162,5 +161,11 @@ func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	)
 	logger.Infof("Run sub-query Find_HSTS_Sanitize:\n%s\n",
 		server.RunQuery("JavaScript", "General", "Find_HSTS_Sanitize"),
+	)
+	logger.Infof("Test error in custom Find_HSTS_Sanitize:\n%s\n",
+		server.TestQuery("JavaScript", "General", "Find_HSTS_Sanitize", "result = base.Find_();"),
+	)
+	logger.Infof("Test scratch query:\n%s\n",
+		server.TestQuery("JavaScript", "CxDefaultQueryGroup", "CxDefaultQuery", "result = Find_Strings();"),
 	)
 }

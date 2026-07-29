@@ -74,6 +74,13 @@ func (m *MCP) registerTools() {
 	})
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "get_high_level_description",
+		Description: "Returns a high-level description of the query override process and query behavior.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.GetHLD()), nil, nil
+	})
+
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
 		Name:        "get_finding_details",
 		Description: "Returns the description, risk, and remediation recommendation for the current finding.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {

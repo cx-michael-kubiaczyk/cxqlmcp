@@ -154,6 +154,7 @@ func (m *MCPBackend) GetQuerySource(query *Cx1ClientGo.SASTQuery) (string, error
 		return "", fmt.Errorf("failed to get project query source: %v", err)
 	}
 	query.MergeQuery(q)
+	query.Source = q.Source
 	return q.Source, nil
 }
 
@@ -187,7 +188,7 @@ func (m MCPBackend) GetCodeSnippets() string {
 	return m.ScanSources.GetSources()
 }
 
-func (m *MCPBackend) VulnAugment(query string, vuln Cx1ClientGo.QueryVulnerability) error {
+func (m *MCPBackend) VulnAugment(number int, query string, vuln Cx1ClientGo.QueryVulnerability) error {
 	for i, v := range vuln.Nodes {
 		if !m.ScanSources.HasFile(v.FileID) {
 			fileSource, err := m.Cx1Client.GetScannedFileSourceByID(m.scan.ScanID, v.FileID)
@@ -196,7 +197,7 @@ func (m *MCPBackend) VulnAugment(query string, vuln Cx1ClientGo.QueryVulnerabili
 			}
 			m.ScanSources.AddFile(v.FileID, fileSource)
 		}
-		m.ScanSources.AugmentFile(v.FileID, v.Line, AugSrc_Audit(query), fmt.Sprintf("step %d", i))
+		m.ScanSources.AugmentFile(v.FileID, v.Line, AugSrc_Audit(fmt.Sprintf("%s #%d", query, number)), fmt.Sprintf("step %d", i+1))
 	}
 	return nil
 }
