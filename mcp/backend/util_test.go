@@ -162,7 +162,7 @@ func TestQueryFormat(t *testing.T) {
 		Queries: qc,
 	}
 
-	formatted := m.FormatQueryHierarchy(queries)
+	formatted := m.FormatQueryHierarchy(queries, []bool{true, true, true, true}, []bool{true, true, true, true})
 	fmt.Printf("Formatted queries: \n%s\n", formatted)
 
 }

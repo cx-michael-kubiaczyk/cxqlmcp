@@ -135,9 +135,9 @@ func (m *MCP) registerTools() {
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
 		Name:        "save_query",
-		Description: "Saves the last successfully tested CxQL query modification as a permanent override at the appropriate hierarchy level.",
-	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input queryInput) (*mcpsdk.CallToolResult, any, error) {
-		return textResult(m.SaveQuery(input.Language, input.Group, input.Name)), nil, nil
+		Description: "Saves the CxQL query modification as a permanent override at the appropriate hierarchy level.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input testQueryInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.SaveQuery(input.Language, input.Group, input.Name, input.Code)), nil, nil
 	})
 
 	type searchInput struct {

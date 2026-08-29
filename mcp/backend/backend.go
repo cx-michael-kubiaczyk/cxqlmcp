@@ -17,7 +17,6 @@ type MCPBackend struct {
 	session      *Cx1ClientGo.AuditSession
 	logger       *logrus.Logger
 	ScanSources  CodeSet
-	TempCode     string
 	Queries      Cx1ClientGo.SASTQueryCollection
 	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
 	targetQuery  []*Cx1ClientGo.SASTQuery
@@ -166,8 +165,21 @@ func (m *MCPBackend) RunQuery(query *Cx1ClientGo.SASTQuery, source string) (Cx1C
 	if err != nil {
 		return Cx1ClientGo.QueryRun{}, fmt.Errorf("failed to refresh audit session: %v", err)
 	}
-	m.TempCode = source
 	return m.Cx1Client.RunSASTQuery(m.session, query, source)
+}
+
+func (m *MCPBackend) SaveQuery(query *Cx1ClientGo.SASTQuery, source string) (Cx1ClientGo.QueryRun, error) {
+	if query == nil {
+		return Cx1ClientGo.QueryRun{}, fmt.Errorf("nil query provided")
+	}
+	err := m.sessionRefresh()
+	if err != nil {
+		return Cx1ClientGo.QueryRun{}, fmt.Errorf("failed to refresh audit session: %v", err)
+	}
+
+	_, run, err := m.Cx1Client.UpdateSASTQuerySource(m.session, *query, source)
+
+	return Cx1ClientGo.QueryRun{FailedQueries: run}, err
 }
 
 func (m *MCPBackend) GetQueryDescription(queryId uint64) (Cx1ClientGo.SASTQueryDescription, error) {

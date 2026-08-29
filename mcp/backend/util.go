@@ -192,12 +192,12 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	return []*Cx1ClientGo.SASTQuery{product, tenant, application, project}, nil
 }
 
-func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
+func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery, edit bool) string {
 	var result strings.Builder
 
 	if query.Level == "Cx" {
 		result.WriteString("Can edit: false\n")
-	} else {
+	} else if edit {
 		result.WriteString("Can edit: true\n")
 	}
 
@@ -205,7 +205,7 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 
 	open, base, _ := query.GetDependencies(&m.Queries)
 	if len(open)+len(base) > 0 {
-		result.WriteString("The following queries are called by this query and can be edited or overridden:\n")
+		result.WriteString("The following queries are called by this query:\n")
 		for _, q := range open {
 			result.WriteString(fmt.Sprintf(" - %s.%s.%s\n", q.Language, q.Group, q.Name))
 		}
@@ -214,18 +214,10 @@ func (m *MCPBackend) FormatQuery(query *Cx1ClientGo.SASTQuery) string {
 		}
 	}
 
-	/*
-		if len(product) > 0 {
-			result.WriteString("The following product-defined functions are called and cannot be edited or overridden:\n- ")
-			result.WriteString(strings.Join(product, "\n- "))
-			result.WriteString("\n")
-		}
-	*/
-
 	return result.String()
 }
 
-func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery) string {
+func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view, edit []bool) string {
 	var result strings.Builder
 
 	var product = queries[0]
@@ -241,32 +233,42 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery) stri
 		result.WriteString(fmt.Sprintf("The query %s - %s - %s is created by the customer in the tenant\n", tenant.Language, tenant.Group, tenant.Name))
 	}
 
-	if product != nil {
+	if product != nil && view[0] {
 		result.WriteString("\n[PRODUCT DEFAULT QUERY INFO]\n")
-		result.WriteString(m.FormatQuery(product))
+		result.WriteString(m.FormatQuery(product, edit[0]))
 	}
 
-	result.WriteString("\n[TENANT CUSTOM QUERY INFO]\n")
-	if tenant != nil {
-		result.WriteString(m.FormatQuery(tenant))
-	} else {
-		result.WriteString("Can create: true\n")
-	}
-
-	if m.application != nil {
-		result.WriteString("\n[APPLICATION CUSTOM QUERY INFO]\n")
-		if app != nil {
-			result.WriteString(m.FormatQuery(app))
+	if view[1] {
+		result.WriteString("\n[TENANT-LEVEL QUERY INFO]\n")
+		if tenant != nil {
+			result.WriteString(m.FormatQuery(tenant, edit[1]))
+		} else if edit[1] {
+			result.WriteString("Doens't exist, can be created\n")
 		} else {
-			result.WriteString("Can create: true\n")
+			result.WriteString("Does not exist, cannot create (out of scope)\n")
 		}
 	}
 
-	result.WriteString("\n[PROJECT CUSTOM QUERY INFO]\n")
-	if proj != nil {
-		result.WriteString(m.FormatQuery(proj))
-	} else {
-		result.WriteString("Can create: true\n")
+	if m.application != nil && view[2] {
+		result.WriteString("\n[APPLICATION-LEVEL QUERY INFO]\n")
+		if app != nil {
+			result.WriteString(m.FormatQuery(app, edit[2]))
+		} else if edit[2] {
+			result.WriteString("Doens't exist, can be created\n")
+		} else {
+			result.WriteString("Does not exist, cannot create (out of scope)\n")
+		}
+	}
+
+	if view[3] {
+		result.WriteString("\n[PROJECT-LEVEL QUERY INFO]\n")
+		if proj != nil {
+			result.WriteString(m.FormatQuery(proj, edit[3]))
+		} else if edit[3] {
+			result.WriteString("Doens't exist, can be created\n")
+		} else {
+			result.WriteString("Does not exist, cannot create (out of scope)\n")
+		}
 	}
 
 	return result.String()

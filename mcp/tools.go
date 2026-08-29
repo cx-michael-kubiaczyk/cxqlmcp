@@ -86,7 +86,17 @@ func (m *MCP) GetQueryInfo(language, group, name string) string {
 		return fmt.Sprintf("Error: Failed to get query hierarchy for %s.%s.%s: %s", language, group, name, err)
 	}
 
-	return m.backend.FormatQueryHierarchy(queries)
+	return m.backend.FormatQueryHierarchy(queries, []bool{true, true, true, true}, []bool{true, true, true, true})
+}
+
+// returns the CxQL hierarchy + source code for a given query, eg: Missing_HSTS_Header
+func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bool) string {
+	queries, err := m.backend.GetQueryHierarchy(language, group, name)
+	if err != nil {
+		return fmt.Sprintf("Error: Failed to get query hierarchy for %s.%s.%s: %s", language, group, name, err)
+	}
+
+	return m.backend.FormatQueryHierarchy(queries, view, edit)
 }
 
 // checks if the original finding is found in the audit session or not
@@ -118,7 +128,7 @@ func (m *MCP) RunQuery(language, group, query string) string {
 		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
-	return m.processAuditResults(executedQuery, &results)
+	return m.processAuditResults(executedQuery, &results, executedQuery.Source)
 }
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
@@ -140,47 +150,44 @@ func (m *MCP) TestQuery(language, group, query, code string) string {
 		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
-	return m.processAuditResults(executedQuery, &results)
+	return m.processAuditResults(executedQuery, &results, code)
 }
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
-func (m *MCP) SaveQuery(language, group, query string) string {
+func (m *MCP) SaveQuery(language, group, query, code string) string {
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	if executedQuery == nil {
+		return "Error: The query %s.%s.%s does not exist"
+	}
+	if executedQuery.Level != m.backend.Cx1Client.QueryTypeProject() {
+		q, err := m.backend.CreateOverride(executedQuery)
+		if err != nil {
+			return fmt.Sprintf("Error: Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
+		}
+		executedQuery = q
+	}
 
-	return ""
-}
-
-func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
-	response := strings.Builder{}
+	results, err := m.backend.SaveQuery(executedQuery, code)
+	if err != nil {
+		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
+	}
 
 	if len(results.FailedQueries) > 0 {
-		//cs := backend.NewCodeSet()
-		for _, f := range results.FailedQueries {
-			q, err := m.backend.UpdateQueryByKey(f.QueryID)
-			if err != nil {
-				fmt.Fprintf(&response, "Error: Failed to retrieve query with key %s: %s", f.QueryID, err)
-				response.WriteString("\n")
-			}
-			var fs backend.FileSource
-			if q.EditorKey == executedQuery.EditorKey {
-				fs = backend.NewFileSource(m.backend.TempCode)
-			} else {
-				fs = backend.NewFileSource(q.Source)
-			}
-			if q != nil {
-				m.logger.Debugf("Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
-				for _, e := range f.Errors {
-					fs.Augment("audit", "Error: "+e.Message, e.Line)
-				}
-
-				fmt.Fprintf(&response, "Error: The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
-				response.WriteString("\n")
-				response.WriteString(fs.Code())
-			} else {
-				fmt.Fprintf(&response, "Error: Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
-				response.WriteString("\n")
-			}
-		}
+		return m.processRunFailures(executedQuery, &results, code)
 	}
+	return fmt.Sprintf("Query %s.%s.%s saved.", language, group, query)
+}
+
+func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+	if len(results.FailedQueries) > 0 {
+		return m.processRunFailures(executedQuery, results, code)
+	}
+
+	return m.processRunResults(executedQuery, results, code)
+}
+
+func (m *MCP) processRunResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+	response := strings.Builder{}
 
 	if len(results.Results) > 0 {
 		for _, r := range results.Results {
@@ -232,6 +239,42 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 
 		response.WriteString("\nSource code:\n")
 		response.WriteString(m.GetCodeSnippets())
+	}
+
+	return response.String()
+}
+
+func (m *MCP) processRunFailures(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+	response := strings.Builder{}
+
+	if len(results.FailedQueries) > 0 {
+		//cs := backend.NewCodeSet()
+		for _, f := range results.FailedQueries {
+			q, err := m.backend.UpdateQueryByKey(f.QueryID)
+			if err != nil {
+				fmt.Fprintf(&response, "Error: Failed to retrieve query with key %s: %s", f.QueryID, err)
+				response.WriteString("\n")
+			}
+			var fs backend.FileSource
+			if q.EditorKey == executedQuery.EditorKey {
+				fs = backend.NewFileSource(code)
+			} else {
+				fs = backend.NewFileSource(q.Source)
+			}
+			if q != nil {
+				m.logger.Debugf("Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
+				for _, e := range f.Errors {
+					fs.Augment("audit", "Error: "+e.Message, e.Line)
+				}
+
+				fmt.Fprintf(&response, "Error: The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
+				response.WriteString("\n")
+				response.WriteString(fs.Code())
+			} else {
+				fmt.Fprintf(&response, "Error: Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
+				response.WriteString("\n")
+			}
+		}
 	}
 
 	return response.String()
