@@ -127,7 +127,7 @@ func (m *MCP) CheckControlProjects() string {
 
 // creates a new preset that includes only the target query
 // automatically sets all control projects to use the preset
-func (m *MCP) CreateCustomPreset() string {
+func (m *MCP) ConfigureCustomPreset(name string) string {
 	return "Error: unimplemented"
 }
 
@@ -298,4 +298,12 @@ func (m *MCP) processRunFailures(executedQuery *Cx1ClientGo.SASTQuery, results *
 	}
 
 	return response.String()
+}
+
+func (m *MCP) GetCurrentApplicationID() string {
+	return m.backend.GetCurrentApplicationID()
+}
+
+func (m *MCP) GetCurrentProjectID() string {
+	return m.backend.GetCurrentProjectID()
 }
