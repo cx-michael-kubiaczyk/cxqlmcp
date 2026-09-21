@@ -10,26 +10,33 @@ import (
 
 // given a full path to a finding, eg: https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName
 // get the query information (code, description, recommendation) for the finding plus the code snippets
-func (m *MCP) CreateSessionFromURL(path string) string {
-	err := m.backend.Initialize(path)
+// the tpFindings represent other projects with true-positive (and true-negative) findings of the same type
+// those other projects will be cloned into a new testing application generated for this run
+func (m *MCP) CreateSessionFromURL(targetFinding string, tpFindings, tnFindings []string) string {
+	err := m.backend.Initialize(targetFinding)
 	if err != nil {
 		return fmt.Sprintf("Error: Failed to initialize session data: %v", err)
 	}
 
+	summary, err := m.backend.CreateTestEnvironment(tpFindings, tnFindings)
+	if err != nil {
+		return fmt.Sprintf("Error: Failed to create test environment: %v\n%s", err, summary)
+	}
+
 	err = m.backend.CreateAuditSession()
 	if err != nil {
-		return fmt.Sprintf("Error: Failed to create audit session: %v", err)
+		return fmt.Sprintf("Error: Failed to create audit session: %v\n%s", err, summary)
 	}
 
 	present, err := m.backend.CheckFindingStatus()
 	if err != nil {
-		return fmt.Sprintf("Error: Failed to check finding status: %v", err)
+		return fmt.Sprintf("Error: Failed to check finding status: %v\n%s", err, summary)
 	}
 	if !present {
-		return fmt.Sprintf("Error: The session was created, but the scan in web-audit did not find this finding: %s", m.backend.Result.String())
+		return fmt.Sprintf("Error: The session was created, but the scan in web-audit did not find this finding: %s\n%s", m.backend.Result.String(), summary)
 	}
 
-	return "The session was created successfully and the finding is present."
+	return fmt.Sprintf("The session was created successfully and the finding is present.\n\n%s", summary)
 }
 
 // returns the current state:
@@ -109,6 +116,19 @@ func (m *MCP) CheckOriginalFinding() string {
 		return "Finding is not present"
 	}
 	return "Finding is present"
+}
+
+// checks if the in-scope finding is present in Control projects
+// Control projects are other projects that exist in the currently-targeted project's Application
+// Control projects should be named with a prefix: TP, FP, TN, FN
+func (m *MCP) CheckControlProjects() string {
+	return "Error: unimplemented"
+}
+
+// creates a new preset that includes only the target query
+// automatically sets all control projects to use the preset
+func (m *MCP) CreateCustomPreset() string {
+	return "Error: unimplemented"
 }
 
 // runs an existing query and returns the results (which may be multiple dataflow paths)

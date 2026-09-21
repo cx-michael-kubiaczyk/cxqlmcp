@@ -1,12 +1,30 @@
 package backend
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 )
+
+const guidCharset = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// newShortID returns a random lowercase-alphanumeric string of the given length,
+// safe for use inside Cx1 application/project names. It is a collision-avoidance
+// id for a handful of throwaway test projects, not a security token, so the
+// slight modulo bias from byte%len(guidCharset) is an accepted simplification.
+func newShortID(length int) (string, error) {
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate random id: %w", err)
+	}
+	for i := range b {
+		b[i] = guidCharset[int(b[i])%len(guidCharset)]
+	}
+	return string(b), nil
+}
 
 func extractIDFromURL(path string) (ProjectID, ScanID, ResultID string, err error) {
 	u, err := url.Parse(path)
@@ -309,7 +327,7 @@ func (m *MCPBackend) endSession() {
 
 func findingsEqual(r *Cx1ClientGo.ScanSASTResult, v Cx1ClientGo.QueryVulnerability) bool {
 	for i, rN := range r.Data.Nodes {
-		if i > len(v.Nodes) {
+		if i >= len(v.Nodes) {
 			return false
 		}
 		vN := &v.Nodes[i]

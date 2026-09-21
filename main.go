@@ -85,8 +85,9 @@ func runTest(server *mcp.MCP, logger *logrus.Logger, mode string) {
 
 func testXSS(server *mcp.MCP, logger *logrus.Logger) {
 	breaker := "=====================================================================\n\n"
+	// todo: pass real TP/TN finding URLs to exercise CreateTestEnvironment
 	logger.Infof("CreateSessionFromURL:\n%s\n%s",
-		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/e25a6a86-2d86-4b1b-8d50-6c6f706decdd/0f562295-d7a8-49d6-bd37-82177647633b?resultId=wta7MY4iw%2BJ3rxS9fiHBXIHukys%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"),
+		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/e25a6a86-2d86-4b1b-8d50-6c6f706decdd/0f562295-d7a8-49d6-bd37-82177647633b?resultId=wta7MY4iw%2BJ3rxS9fiHBXIHukys%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName", nil, nil),
 		breaker,
 	)
 	/*
@@ -150,8 +151,9 @@ result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 }
 
 func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
+	// todo: pass real TP/TN finding URLs to exercise CreateTestEnvironment
 	logger.Infof("CreateSessionFromURL:\n%s\n",
-		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"),
+		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName", nil, nil),
 	)
 	logger.Infof("HLD:\n%s\n", server.HLD)
 	logger.Infof("Finding details:\n%s\n", server.GetFindingDetails())

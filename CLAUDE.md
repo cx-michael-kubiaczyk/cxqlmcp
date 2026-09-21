@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a **two-module Go workspace**:
 
 - `/go.mod` — root binary (`github.com/cxpsemea/cxqlmcp`)
-- `/mcp/go.mod` — sub-module library (`github.com/cxpsemea/cxqlmcp/mcp`)
+- `/mcp/go.mod` — sub-module library (`github.com/cxpsemea/cxqlmcp/mcp`), pulled into the root module via a `replace` directive to `./mcp`
 
-Both modules use a `replace` directive pointing `github.com/cxpsemea/Cx1ClientGo v0.1.59` to `../Cx1ClientGo`, a sibling directory that must be checked out locally. Build and test commands must be run separately per module when needed.
+Both modules depend on `github.com/cxpsemea/Cx1ClientGo` as a normal versioned dependency (no local sibling checkout required). Build and test commands must be run separately per module when needed.
 
 ## Build & Test Commands
 
@@ -28,36 +28,39 @@ go test -v ./mcp/backend/...
 # Run a specific test
 go test -v ./mcp/backend/... -run TestName
 
-# Run the binary (requires Cx1 credentials in environment)
+# Run the MCP server over stdio (requires Cx1 credentials in environment)
 go run main.go
+
+# Run the built-in dev test harness instead of the MCP server
+go run main.go --test hsts   # or --test xss
 ```
 
-The `util_test.go` tests require `queries.json` (3.6 MB fixture, gitignored). This file must be obtained separately from Cx1 — tests will fail without it. `queries.json` is loaded using relative paths `"../queries.json"` and `"../../queries.json"`.
+The `util_test.go` tests require `queries.json` (3.6 MB fixture, gitignored). This file must be obtained separately from Cx1 — tests will fail without it. `queries.json` is loaded using relative paths `"../queries.json"` and `"../../queries.json"`, depending on the test.
 
 ## Architecture
 
 ### Three-layer design
 
-**`main.go`** — Entry point. Initializes the HTTP client, `Cx1Client` (credentials read from env vars), creates the MCP struct, and calls `runTest()` (a development harness, not a real MCP server yet).
+**`main.go`** — Entry point. Sets up logging, initializes the HTTP client and `Cx1Client` (credentials read from env vars via `Cx1ClientGo.NewClient`), constructs the `mcp.MCP` server, and either runs the stdio MCP server (`server.Start()`) or, if `--test hsts|xss` is passed, runs a hardcoded scripted harness (`runTest` / `testXSS` / `testHSTS`) against a live Cx1 tenant for manual exploration.
 
-**`mcp/` (tools layer)** — `MCP` struct exposes the LLM-facing tool methods. `mcp.go` defines the struct and an `HLD` string (a multi-paragraph prompt injected into LLM context explaining CxQL, the override hierarchy, and the FP remediation workflow). `tools.go` implements all tool methods.
+**`mcp/` (tools layer)** — `mcp.go` defines the `MCP` struct, the `HLD` string (a multi-paragraph prompt injected as the MCP server's `Instructions`, explaining CxQL, the override hierarchy, and the FP remediation workflow), and `registerTools()`, which registers every LLM-facing tool (`create_session`, `get_current_state`, `get_query_info`, `run_query`, `test_query`, `save_query`, etc.) with typed input structs via `mcpsdk.AddTool`. `tools.go` implements the corresponding `MCP` methods that back those tools.
 
-**`mcp/backend/` (backend layer)** — `MCPBackend` struct holds session state: the `Cx1Client`, resolved project/application/scan entities, the `ScanSASTResult` being investigated, the `AuditSession`, a `CodeSet` of annotated source files, and `targetQuery [4]*SASTQuery` (one slot per hierarchy level).
+**`mcp/backend/` (backend layer)** — `MCPBackend` struct holds session state: the `Cx1Client`, resolved project/application/scan entities, the `ScanSASTResult` being investigated, the `AuditSession`, a `CodeSet` of annotated source files, and `targetQuery []*SASTQuery` (one slot per hierarchy level).
 
 ### Key non-obvious details
 
-- **Proxy hardcoded in `main.go`**: `http://127.0.0.1:8080` with `InsecureSkipVerify: true` is enabled via `if true { ... }` — development convenience for a local MITM proxy. Must be disabled before any production use.
+- **Proxy hardcoded in `main.go`**: a dev-only MITM proxy block (`http://127.0.0.1:8080`, `InsecureSkipVerify: true`) is gated behind `if false { ... }`. Flip to `true` locally to inspect Cx1 API traffic; never commit it enabled.
 
-- **`flag.Parse()` never called**: The `--log` flag is registered but `flag.Parse()` is not called, so the log level is permanently `INFO` regardless of the flag.
+- **`flag.Parse()` never called**: `--log` and `--test` are registered with `flag.String` but `flag.Parse()` is not invoked, so both flags are permanently stuck at their defaults (`--log` always resolves to `INFO`) regardless of what's passed on the command line.
 
-- **MCP protocol not yet wired**: `Start()` is a no-op. The project is building tool logic; the stdio/SSE MCP transport layer is not yet implemented.
+- **MCP transport is wired**: `MCP.Start()` runs `m.server.Run(ctx, &mcpsdk.StdioTransport{})` — this is a real stdio MCP server, not a stub. Logging is sent to stderr specifically so it doesn't corrupt the stdio transport on stdout.
 
-- **`SaveQuery()`, `SearchCode()`, `ShowSourceCode()`** in `tools.go` are stubs — not yet implemented.
+- **`SearchCode()` and `ShowSourceCode()`** in `tools.go` are still stubs (return `""`). `SaveQuery()` is implemented. `CheckControlProjects()` and `CreateCustomPreset()` are placeholders that return `"Error: unimplemented"` — part of an in-progress feature to clone true-positive/true-negative "control projects" into a scratch test application for validating query changes (see the `todo` comments in `CreateSessionFromURL`).
 
 - **Query hierarchy index convention**: `GetQueryHierarchy` always returns `[product, tenant, application, project]` (indices 0–3). Nil means no override at that level. `FormatQueryHierarchy` and `closestQuery` depend on this convention.
 
-- **Code annotation system** (`filesource.go`): `FileSource` stores source lines plus an `Augs` map from line number → `AugmentSource` → `[]string`. `Code()` renders source with inline `// AugmentSource: step N` comments. `AugmentSource` distinguishes "Finding X" annotations (from the original scan dataflow) from "Query Y" annotations (from audit run results).
+- **Code annotation system** (`filesource.go`): `FileSource` stores source lines plus an `Augs` map from line number → `AugmentSource` → `[]string`. `Code()` renders source with inline `// AugmentSource: message` comments. `AugSrc_Finding(query)` marks nodes from the original scan dataflow; `AugSrc_Audit(query)` marks nodes from an audit query run (`VulnAugment`) or inline query errors (`processRunFailures` in `tools.go`).
 
-- **`TempCode` field**: When `RunQuery` is called, the source under test is stored in `MCPBackend.TempCode`. `processAuditResults` uses this to match error locations back to the code being tested rather than the stored query code.
+- **`findingsEqual` (`util.go`)**: compares a `ScanSASTResult`'s nodes against a `QueryVulnerability`'s nodes index-by-index and returns `true` on the **first matching index**, not requiring the whole path to match — a false match is possible whenever two dataflows happen to agree at any single node position. The bounds check (`i > len(v.Nodes)`) is also off-by-one for the final index.
 
-- **`findingsEqual` limitation**: Compares `ScanSASTResult` nodes against `QueryVulnerability` nodes by checking only the first node's file/line/column/name. May produce false matches if multiple findings share the same first node.
+- **`registerTools` input structs are the API contract**: tool argument shapes (e.g. `queryInput`, `testQueryInput`) are defined inline as anonymous structs in `mcp.go` right next to each `mcpsdk.AddTool` call — check there first when changing a tool's parameters, not just in `tools.go`.

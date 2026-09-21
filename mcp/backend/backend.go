@@ -2,24 +2,40 @@ package backend
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 	"github.com/sirupsen/logrus"
 )
 
 type MCPBackend struct {
-	Cx1Client    *Cx1ClientGo.Cx1Client
-	project      *Cx1ClientGo.Project
-	application  *Cx1ClientGo.Application
-	scan         *Cx1ClientGo.Scan
-	Result       *Cx1ClientGo.ScanSASTResult
-	Vuln         *Cx1ClientGo.QueryVulnerability
-	session      *Cx1ClientGo.AuditSession
-	logger       *logrus.Logger
-	ScanSources  CodeSet
-	Queries      Cx1ClientGo.SASTQueryCollection
-	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
-	targetQuery  []*Cx1ClientGo.SASTQuery
+	Cx1Client       *Cx1ClientGo.Cx1Client
+	project         *Cx1ClientGo.Project
+	application     *Cx1ClientGo.Application
+	scan            *Cx1ClientGo.Scan
+	Result          *Cx1ClientGo.ScanSASTResult
+	Vuln            *Cx1ClientGo.QueryVulnerability
+	session         *Cx1ClientGo.AuditSession
+	logger          *logrus.Logger
+	ScanSources     CodeSet
+	Queries         Cx1ClientGo.SASTQueryCollection
+	descriptions    map[uint64]Cx1ClientGo.SASTQueryDescription
+	targetQuery     []*Cx1ClientGo.SASTQuery
+	testAppGUID     string
+	ControlProjects []ControlProject
+}
+
+// ControlProject represents a TP/TN reference project cloned into the test
+// application for a create_session run, for later use by CheckControlProjects.
+type ControlProject struct {
+	Label           string // "TP" or "TN"
+	Index           int    // 1-based position within its label group
+	ProjectID       string
+	ProjectName     string
+	ScanID          string
+	SourceProjectID string // original project this was cloned from
+	SourceScanID    string // original scan this was cloned from
+	ScanStatus      string // final polled status, or "failed: <err>" if scan/upload/create failed
 }
 
 func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBackend {
@@ -70,6 +86,242 @@ func (m *MCPBackend) Initialize(path string) error {
 
 	return nil
 }
+
+func (m *MCPBackend) GetCurrentProjectID() string {
+	if m.project == nil {
+		return "Error: no project configured"
+	}
+	return m.project.ProjectID
+}
+func (m *MCPBackend) GetCurrentApplicationID() string {
+	if m.application == nil {
+		return "Error: no application configured"
+	}
+	return m.application.ApplicationID
+}
+
+func (m *MCPBackend) ConfigureCustomPreset(presetName string) (Cx1ClientGo.Preset, error) {
+	if m.Result == nil {
+		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to initialize, no result in scope")
+	}
+
+	targetQueryCollection := Cx1ClientGo.SASTQueryCollection{}
+	query := m.Queries.GetQueryByID(m.Result.Data.QueryID)
+	if query == nil {
+		return Cx1ClientGo.Preset{}, fmt.Errorf("unable to find target query %s with ID %d", m.Result.Data.QueryName, m.Result.Data.QueryID)
+	}
+	targetQueryCollection.AddQuery(*query)
+
+	preset, err := m.Cx1Client.GetPresetByName("sast", presetName)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "no such preset") {
+			preset, err = m.Cx1Client.CreateSASTPreset(presetName, "Test preset for CxQL MCP", targetQueryCollection)
+			if err != nil {
+				return Cx1ClientGo.Preset{}, fmt.Errorf("failed to create custom preset: %v", err)
+			}
+			return preset, nil
+		}
+		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to get custom preset: %v", err)
+	}
+
+	preset.UpdateQueries(targetQueryCollection)
+	if err := m.Cx1Client.UpdateSASTPreset(preset); err != nil {
+		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to update custom preset: %v", err)
+	}
+	return preset, nil
+}
+
+// createAndScanProject creates one project inside the given application, assigns
+// it the given preset, uploads the given source zip, and triggers (but does not
+// poll) a scan. Returns the created project, the triggered (unpolled) scan, and
+// an error if any step failed.
+func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName string, sourceZip []byte, branch string) (Cx1ClientGo.Project, Cx1ClientGo.Scan, error) {
+	project, err := m.Cx1Client.CreateProjectInApplication(projectName, []string{}, map[string]string{}, applicationID)
+	if err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to create project: %v", err)
+	}
+
+	if err := m.Cx1Client.SetProjectPresetByID(project.ProjectID, presetName, false); err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to assign preset: %v", err)
+	}
+
+	uploadUrl, err := m.Cx1Client.UploadBytes(&sourceZip)
+	if err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to upload source: %v", err)
+	}
+
+	if branch == "" {
+		branch = "main"
+	}
+	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, []Cx1ClientGo.ScanConfiguration{}, map[string]string{})
+	if err != nil {
+		return project, scan, fmt.Errorf("failed to trigger scan: %v", err)
+	}
+	return project, scan, nil
+}
+
+// projectSpec describes one project to be created as part of a test environment:
+// either the target finding's project (Label == "Target") or a TP/TN control project.
+type projectSpec struct {
+	label           string
+	index           int
+	projectName     string
+	sourceProjectID string
+	sourceScanID    string
+	sourceBranch    string
+}
+
+// specResult holds the outcome of creating+scanning one projectSpec.
+type specResult struct {
+	spec    projectSpec
+	project Cx1ClientGo.Project
+	scan    Cx1ClientGo.Scan
+	err     error
+}
+
+// CreateTestEnvironment builds a disposable Cx1 Application containing a full-source
+// copy of the current target project/scan (m.project/m.scan, populated by a prior
+// call to Initialize), plus one control project per tpFindings/tnFindings entry.
+// All projects share one preset containing only the target finding's query.
+// On success, m.project/m.application/m.scan are reassigned to the new target
+// project/app/scan so subsequent audit-session calls operate on the copy.
+// Returns a human-readable per-project summary, and an error only if the target
+// project/scan itself failed (TP/TN failures are reported in the summary only).
+func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (string, error) {
+	if m.project == nil || m.scan == nil {
+		return "", fmt.Errorf("no target project/scan loaded, call Initialize first")
+	}
+
+	guid, err := newShortID(10)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate test id: %v", err)
+	}
+	m.testAppGUID = guid
+
+	app, err := m.Cx1Client.CreateApplication("CxQL-" + guid)
+	if err != nil {
+		return "", fmt.Errorf("failed to create test application: %v", err)
+	}
+
+	presetName := "CxQL-" + guid
+	if _, err := m.ConfigureCustomPreset(presetName); err != nil {
+		return "", fmt.Errorf("failed to configure preset: %v", err)
+	}
+
+	specs := []projectSpec{
+		{
+			label:           "Target",
+			index:           0,
+			projectName:     "CxQL-Target-" + guid,
+			sourceProjectID: m.project.ProjectID,
+			sourceScanID:    m.scan.ScanID,
+			sourceBranch:    m.project.MainBranch,
+		},
+	}
+
+	appendSpecs := func(label string, urls []string) error {
+		for i, u := range urls {
+			pid, sid, _, err := extractIDFromURL(u)
+			if err != nil {
+				return fmt.Errorf("failed to parse %s url %q: %v", label, u, err)
+			}
+			sourceProject, err := m.Cx1Client.GetProjectByID(pid)
+			if err != nil {
+				return fmt.Errorf("failed to get %s source project %s: %v", label, pid, err)
+			}
+			specs = append(specs, projectSpec{
+				label:           label,
+				index:           i + 1,
+				projectName:     fmt.Sprintf("CxQL-%s-%d-%s", label, i+1, guid),
+				sourceProjectID: pid,
+				sourceScanID:    sid,
+				sourceBranch:    sourceProject.MainBranch,
+			})
+		}
+		return nil
+	}
+	if err := appendSpecs("TP", tpFindings); err != nil {
+		return "", err
+	}
+	if err := appendSpecs("TN", tnFindings); err != nil {
+		return "", err
+	}
+
+	// First pass: trigger every project's scan without waiting.
+	results := make([]specResult, len(specs))
+	for i, spec := range specs {
+		sourceZip, err := m.Cx1Client.GetScanSourcesByID(spec.sourceScanID)
+		if err != nil {
+			results[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
+			continue
+		}
+		project, scan, err := m.createAndScanProject(app.ApplicationID, spec.projectName, presetName, sourceZip, spec.sourceBranch)
+		results[i] = specResult{spec: spec, project: project, scan: scan, err: err}
+	}
+
+	// Second pass: poll every scan that was triggered successfully.
+	for i := range results {
+		if results[i].err != nil {
+			continue
+		}
+		polled, err := m.Cx1Client.ScanPolling(&results[i].scan)
+		if err != nil {
+			results[i].err = fmt.Errorf("scan polling failed: %v", err)
+			continue
+		}
+		results[i].scan = polled
+	}
+
+	summary := strings.Builder{}
+	var targetErr error
+	for _, r := range results {
+		name := r.spec.label
+		if r.spec.label != "Target" {
+			name = fmt.Sprintf("%s-%d", r.spec.label, r.spec.index)
+		}
+
+		if r.err != nil {
+			fmt.Fprintf(&summary, "%s: FAILED - %v\n", name, r.err)
+			if r.spec.label == "Target" {
+				targetErr = r.err
+			} else {
+				m.ControlProjects = append(m.ControlProjects, ControlProject{
+					Label:           r.spec.label,
+					Index:           r.spec.index,
+					SourceProjectID: r.spec.sourceProjectID,
+					SourceScanID:    r.spec.sourceScanID,
+					ScanStatus:      "failed: " + r.err.Error(),
+				})
+			}
+			continue
+		}
+
+		fmt.Fprintf(&summary, "%s: created project %s (%s), scan %s status %s\n", name, r.spec.projectName, r.project.ProjectID, r.scan.ScanID, r.scan.Status)
+
+		if r.spec.label == "Target" {
+			m.project = &r.project
+			m.application = &app
+			m.scan = &r.scan
+		} else {
+			m.ControlProjects = append(m.ControlProjects, ControlProject{
+				Label:           r.spec.label,
+				Index:           r.spec.index,
+				ProjectID:       r.project.ProjectID,
+				ProjectName:     r.spec.projectName,
+				ScanID:          r.scan.ScanID,
+				SourceProjectID: r.spec.sourceProjectID,
+				SourceScanID:    r.spec.sourceScanID,
+				ScanStatus:      r.scan.Status,
+			})
+		}
+	}
+
+	if targetErr != nil {
+		return summary.String(), fmt.Errorf("failed to create target project: %v", targetErr)
+	}
+	return summary.String(), nil
+}
+
 func (m *MCPBackend) Shutdown() {
 	if m.session != nil {
 		m.endSession()

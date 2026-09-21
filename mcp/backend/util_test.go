@@ -145,7 +145,7 @@ func TestQueryFormat(t *testing.T) {
 		return
 	}
 
-	data, err = os.ReadFile("../queries.json")
+	data, err = os.ReadFile("../../queries.json")
 	if err != nil {
 		t.Errorf("Failed to read queries.json: %s", err)
 		return

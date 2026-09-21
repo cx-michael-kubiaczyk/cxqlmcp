@@ -56,14 +56,16 @@ func textResult(s string) *mcpsdk.CallToolResult {
 }
 
 func (m *MCP) registerTools() {
-	type urlInput struct {
-		Path string `json:"path" jsonschema:"Full URL of the Checkmarx One SAST finding result page"`
+	type createSessionInput struct {
+		TargetURL string   `json:"target_url" jsonschema:"Full URL of the Checkmarx One SAST finding result page to remediate"`
+		TPUrls    []string `json:"tp_urls,omitempty" jsonschema:"Full URLs of true-positive findings of the same query type, cloned as control projects to verify a fix doesn't break real detections"`
+		TNUrls    []string `json:"tn_urls,omitempty" jsonschema:"Full URLs of true-negative findings of the same query type, cloned as control projects to verify a fix doesn't reintroduce false positives"`
 	}
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
 		Name:        "create_session",
-		Description: "Initialize a remediation session from a Checkmarx One SAST finding URL. Must be called before any other tool.",
-	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input urlInput) (*mcpsdk.CallToolResult, any, error) {
-		return textResult(m.CreateSessionFromURL(input.Path)), nil, nil
+		Description: "Initialize a remediation session from a Checkmarx One SAST finding URL, optionally cloning true-positive/true-negative control projects for validation. Must be called before any other tool.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input createSessionInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.CreateSessionFromURL(input.TargetURL, input.TPUrls, input.TNUrls)), nil, nil
 	})
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
