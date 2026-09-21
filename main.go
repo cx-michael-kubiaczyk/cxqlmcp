@@ -153,7 +153,9 @@ result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	// todo: pass real TP/TN finding URLs to exercise CreateTestEnvironment
 	logger.Infof("CreateSessionFromURL:\n%s\n",
-		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName", nil, nil),
+		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName",
+			[]string{"https://deu.ast.checkmarx.net/sast-results/2a03108b-96dc-496a-b451-c80aac2aa1db/8e62d430-7587-4637-b99c-5d4be8ba090b?resultId=b5%2F3vdqME0D%2FfIke2QS8GEI%2FrB0%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"},
+			[]string{"01d5a148-9685-4051-b172-f3b6f282ec42", "d201f7ca-f66b-4f20-a491-8ac869e9e011"}),
 	)
 	logger.Infof("HLD:\n%s\n", server.HLD)
 	logger.Infof("Finding details:\n%s\n", server.GetFindingDetails())
