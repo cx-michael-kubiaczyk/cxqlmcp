@@ -102,83 +102,6 @@ func (m *MCPBackend) GetCurrentApplicationID() string {
 	return m.Target.Application.ApplicationID
 }
 
-func (m *MCPBackend) configureCustomPreset() (Cx1ClientGo.Preset, error) {
-	presetName := "CxQL-" + m.Target.TestAppGUID
-	targetQueryCollection := Cx1ClientGo.SASTQueryCollection{}
-	query := m.Queries.GetQueryByID(m.Target.QueryID)
-	if query == nil {
-		return Cx1ClientGo.Preset{}, fmt.Errorf("unable to find target query %s with ID %d", m.Target.Result.Data.QueryName, m.Target.Result.Data.QueryID)
-	}
-	targetQueryCollection.AddQuery(*query)
-
-	preset, err := m.Cx1Client.GetPresetByName("sast", presetName)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "no such preset") {
-			preset, err = m.Cx1Client.CreateSASTPreset(presetName, "Test preset for CxQL MCP", targetQueryCollection)
-			if err != nil {
-				return Cx1ClientGo.Preset{}, fmt.Errorf("failed to create custom preset: %v", err)
-			}
-			return preset, nil
-		}
-		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to get custom preset: %v", err)
-	}
-
-	preset.UpdateQueries(targetQueryCollection)
-	if err := m.Cx1Client.UpdateSASTPreset(preset); err != nil {
-		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to update custom preset: %v", err)
-	}
-	return preset, nil
-}
-
-// createAndScanProject creates one project inside the given application, assigns
-// it the given preset, uploads the given source zip, and triggers (but does not
-// poll) a scan. Returns the created project, the triggered (unpolled) scan, and
-// an error if any step failed.
-func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName string, sourceZip []byte, branch string) (Cx1ClientGo.Project, Cx1ClientGo.Scan, error) {
-	project, err := m.Cx1Client.CreateProjectInApplication(projectName, []string{}, map[string]string{}, applicationID)
-	if err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to create project: %v", err)
-	}
-
-	if err := m.Cx1Client.SetProjectPresetByID(project.ProjectID, presetName, false); err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to assign preset: %v", err)
-	}
-
-	uploadUrl, err := m.Cx1Client.UploadBytes(&sourceZip)
-	if err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to upload source: %v", err)
-	}
-
-	if branch == "" {
-		branch = "main"
-	}
-	scanConfig := &Cx1ClientGo.ScanConfigurationSet{}
-	scanConfig.AddScanEngine("sast")
-	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, scanConfig.Configurations, map[string]string{})
-	if err != nil {
-		return project, scan, fmt.Errorf("failed to trigger scan: %v", err)
-	}
-	return project, scan, nil
-}
-
-// projectSpec describes one project to be created as part of a test environment:
-// either the target finding's project (Label == "Target") or a TP/TN control project.
-type projectSpec struct {
-	label           string
-	index           int
-	projectName     string
-	sourceProjectID string
-	sourceScanID    string
-}
-
-// specResult holds the outcome of creating+scanning one projectSpec.
-type specResult struct {
-	spec    projectSpec
-	project *Cx1ClientGo.Project
-	scan    *Cx1ClientGo.Scan
-	err     error
-}
-
 // CreateTestEnvironment builds a disposable Cx1 Application containing a full-source
 // copy of the current target project/scan (m.project/m.scan, populated by a prior
 // call to Initialize), plus one control project per tpFindings/tnFindings entry.
@@ -187,25 +110,25 @@ type specResult struct {
 // project/app/scan so subsequent audit-session calls operate on the copy.
 // Returns a human-readable per-project summary, and an error only if the target
 // project/scan itself failed (TP/TN failures are reported in the summary only).
-func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, scan *Cx1ClientGo.Scan, tpFindings, tnFindings []string) (string, error) {
+func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, scan *Cx1ClientGo.Scan, tpFindings, tnFindings []string) error {
 	if scan == nil || result == nil {
-		return "", fmt.Errorf("no target project/scan loaded")
+		return fmt.Errorf("no target project/scan loaded")
 	}
 
 	guid, err := newShortID(10)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate test id: %v", err)
+		return fmt.Errorf("failed to generate test id: %v", err)
 	}
 	m.Target.TestAppGUID = guid
 
 	app, err := m.Cx1Client.CreateApplication("CxQL-" + guid)
 	if err != nil {
-		return "", fmt.Errorf("failed to create test application: %v", err)
+		return fmt.Errorf("failed to create test application: %v", err)
 	}
 	m.Target.Application = &app
 
 	if _, err := m.configureCustomPreset(); err != nil {
-		return "", fmt.Errorf("failed to configure preset: %v", err)
+		return fmt.Errorf("failed to configure preset: %v", err)
 	}
 
 	specs := []projectSpec{
@@ -235,12 +158,12 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 		return nil
 	}
 	if err := appendSpecs("TP", tpFindings); err != nil {
-		return "", err
+		return err
 	}
 	for i, sid := range tnFindings {
 		scan, err := m.Cx1Client.GetScanByID(sid)
 		if err != nil {
-			return "", fmt.Errorf("failed to get TN source scan %s: %v", sid, err)
+			return fmt.Errorf("failed to get TN source scan %s: %v", sid, err)
 		}
 
 		specs = append(specs, projectSpec{
@@ -253,41 +176,34 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 	}
 
 	// First pass: trigger every project's scan without waiting.
-	results := make([]specResult, len(specs))
+	scans := make([]specResult, len(specs))
 	for i, spec := range specs {
 		m.logger.Debugf("Processing %s %d: source scan ID %s", spec.label, spec.index, spec.sourceScanID)
 		sourceZip, err := m.Cx1Client.GetScanSourcesByID(spec.sourceScanID)
 		if err != nil {
-			results[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
+			scans[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
 			continue
 		}
 		project, scan, err := m.createAndScanProject(app.ApplicationID, spec.projectName, "CxQL-"+m.Target.TestAppGUID, sourceZip, "test")
-		results[i] = specResult{spec: spec, project: &project, scan: &scan, err: err}
+		scans[i] = specResult{spec: spec, project: &project, scan: &scan, err: err}
 	}
 
 	// Second pass: poll every scan that was triggered successfully.
-	for i := range results {
-		if results[i].err != nil {
+	for i := range scans {
+		if scans[i].err != nil {
 			continue
 		}
-		polled, err := m.Cx1Client.ScanPollingDetailed(results[i].scan)
+		polled, err := m.Cx1Client.ScanPollingDetailed(scans[i].scan)
 		if err != nil {
-			results[i].err = fmt.Errorf("scan polling failed: %v", err)
+			scans[i].err = fmt.Errorf("scan polling failed: %v", err)
 			continue
 		}
-		results[i].scan = &polled
+		scans[i].scan = &polled
 	}
 
-	summary := strings.Builder{}
 	var targetErr error
-	for _, r := range results {
-		name := r.spec.label
-		if r.spec.label != "Target" {
-			name = fmt.Sprintf("%s-%d", r.spec.label, r.spec.index)
-		}
-
+	for _, r := range scans {
 		if r.err != nil {
-			fmt.Fprintf(&summary, "%s: FAILED - %v\n", name, r.err)
 			if r.spec.label == "Target" {
 				targetErr = r.err
 			} else {
@@ -301,8 +217,6 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 			}
 			continue
 		}
-
-		fmt.Fprintf(&summary, "%s: created project %s (%s), scan %s status %s\n", name, r.spec.projectName, r.project.ProjectID, r.scan.ScanID, r.scan.Status)
 
 		if r.spec.label == "Target" {
 			m.Target.Project = r.project
@@ -322,16 +236,16 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 	}
 
 	if targetErr != nil {
-		return summary.String(), fmt.Errorf("failed to create target project: %v", targetErr)
+		return fmt.Errorf("failed to create target project: %v", targetErr)
 	}
 
-	if results[0].err != nil {
-		return summary.String(), fmt.Errorf("target FP repro scan failed: %s", results[0].err)
+	if scans[0].err != nil {
+		return fmt.Errorf("target FP repro scan failed: %s", scans[0].err)
 	}
 
-	scanresults, err := m.Cx1Client.GetAllScanSASTResultsByID(results[0].scan.ScanID)
+	scanresults, err := m.Cx1Client.GetAllScanSASTResultsByID(scans[0].scan.ScanID)
 	if err != nil {
-		return summary.String(), fmt.Errorf("failed to get scan results for target repro scan %s: %s", results[0].scan.ScanID, err)
+		return fmt.Errorf("failed to get scan results for target repro scan %s: %s", scans[0].scan.ScanID, err)
 	}
 
 	for _, r := range scanresults {
@@ -340,8 +254,11 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 			break
 		}
 	}
+	if m.Target.Result == nil {
+		return fmt.Errorf("did not find the expected similarityID %s & queryID %s in the new target repro scan %s", result.SimilarityID, result.Data.QueryName, scans[0].scan.String())
+	}
 
-	return summary.String(), nil
+	return nil
 }
 
 func (m *MCPBackend) Shutdown() {
@@ -401,6 +318,38 @@ func (m *MCPBackend) CheckFindingStatus() (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (m *MCPBackend) CheckControlProjects() (string, int) {
+	fails := 0
+	summary := strings.Builder{}
+	for _, cp := range m.ControlProjects {
+		state := ""
+		findingStatus, err := m.checkControlFindingStatus(cp.ScanID)
+		m.logger.Debugf("Finding %s-%d: %t, %v", cp.Label, cp.Index, findingStatus, err)
+		if err != nil {
+			state = "Error: " + err.Error()
+			fails++
+		} else if findingStatus {
+			if cp.Label == "TP" {
+				state = "OK"
+			} else {
+				state = "NOK"
+				fails++
+			}
+		} else {
+			if cp.Label == "TN" {
+				state = "OK"
+			} else {
+				state = "NOK"
+				fails++
+			}
+		}
+
+		fmt.Fprintf(&summary, "%s-%d: %s\n", cp.Label, cp.Index, state)
+	}
+
+	return summary.String(), fails
 }
 
 func (m *MCPBackend) GetRunResults(result Cx1ClientGo.QueryRunResult) ([]Cx1ClientGo.QueryVulnerability, error) {
@@ -483,7 +432,7 @@ func (m *MCPBackend) VulnAugment(number int, query string, vuln Cx1ClientGo.Quer
 			}
 			m.ScanSources.AddFile(v.FileID, fileSource)
 		}
-		m.ScanSources.AugmentFile(v.FileID, v.Line, AugSrc_Audit(fmt.Sprintf("%s #%d", query, number)), fmt.Sprintf("step %d", i+1))
+		m.ScanSources.AugmentFile(v.FileID, v.Line, AugSrc_Audit(fmt.Sprintf("%s #%d", query, number)), fmt.Sprintf("step %d: '%s'", i+1, vuln.Nodes[0].Name))
 	}
 	return nil
 }
@@ -511,4 +460,128 @@ func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.
 	}
 
 	return m.Queries.GetQueryByLevelAndID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID, query.QueryID), nil
+}
+
+func (m *MCPBackend) UpdateQueryCollection() error {
+	m.logger.Debugf("Updating query collection")
+	qc, err := m.Cx1Client.GetQueriesByLevelID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
+	if err != nil {
+		return fmt.Errorf("failed to get queries: %v", err)
+	}
+	m.Queries.AddCollection(&qc)
+
+	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
+	if err != nil {
+		return fmt.Errorf("failed to get audit queries: %v", err)
+	}
+
+	m.Queries.AddCollection(&aq)
+	return nil
+}
+
+func (m *MCPBackend) ProcessAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+	if len(results.FailedQueries) > 0 {
+		return m.ProcessRunFailures(executedQuery, results, code)
+	}
+
+	return m.ProcessRunResults(executedQuery, results)
+}
+
+func (m *MCPBackend) ProcessRunResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
+	response := strings.Builder{}
+
+	if len(results.Results) > 0 {
+		vulnCount := 0
+		for _, r := range results.Results {
+			vulns, err := m.GetRunResults(r)
+			if err != nil {
+				fmt.Fprintf(&response, "Failed to get run result %s: %s", r.RunID, err)
+				response.WriteString("\n")
+			} else {
+				parts := strings.Split(r.Title, " ")
+				if len(parts) >= 1 {
+					queryName := parts[0]
+					var runQuery *Cx1ClientGo.SASTQuery
+					if strings.EqualFold(queryName, executedQuery.Name) {
+						runQuery = executedQuery
+					} else {
+						productQuery := m.Queries.FindQuery(m.Cx1Client.QueryTypeProduct(), "", executedQuery.Language, queryName, 0)
+						if productQuery != nil {
+							runQuery = productQuery
+						} else {
+							tenantQuery := m.Queries.FindQuery(m.Cx1Client.QueryTypeTenant(), "", executedQuery.Language, queryName, 0)
+							if tenantQuery != nil {
+								runQuery = tenantQuery
+							} else {
+								m.logger.Errorf("Failed to find %s query %s", executedQuery.Language, queryName)
+							}
+						}
+					}
+
+					if runQuery != nil {
+						queryName = runQuery.Name
+					} else {
+						queryName = "Unknown query " + queryName
+					}
+
+					fmt.Fprintf(&response, "Query %s.%s.%s ran with %d results.", runQuery.Language, runQuery.Group, runQuery.Name, len(vulns))
+					response.WriteString("\n")
+					for i, v := range vulns {
+						//fmt.Fprintf(&response, "%d: %+v", i, v)
+						//response.WriteString("\n")
+						if err := m.VulnAugment(i, queryName, v); err != nil {
+							m.logger.Errorf("Failed to augment code with %s vuln %s", queryName, v)
+						} else {
+							vulnCount++
+						}
+					}
+				} else {
+					m.logger.Infof("Failed to get query from title: %s", r.Title)
+				}
+			}
+		}
+
+		if vulnCount > 0 {
+			response.WriteString("\nSource code:\n")
+			response.WriteString(m.GetCodeSnippets())
+		}
+	}
+
+	return response.String()
+}
+
+func (m *MCPBackend) ProcessRunFailures(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+	response := strings.Builder{}
+
+	if len(results.FailedQueries) > 0 {
+		//cs := backend.NewCodeSet()
+		for _, f := range results.FailedQueries {
+			q, err := m.UpdateQueryByKey(f.QueryID)
+			if err != nil {
+				fmt.Fprintf(&response, "Error: Failed to retrieve query with key %s: %s", f.QueryID, err)
+				response.WriteString("\n")
+			}
+			var fs FileSource
+			if q.EditorKey == executedQuery.EditorKey {
+				fs = NewFileSource(code)
+			} else {
+				fs = NewFileSource(q.Source)
+			}
+			if q != nil {
+				m.logger.Debugf("Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
+				for _, e := range f.Errors {
+					fs.Augment("audit", "Error: "+e.Message, e.Line)
+				}
+
+				fmt.Fprintf(&response, "Error: The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
+				response.WriteString("\n")
+				response.WriteString(fs.Code())
+			} else {
+				fmt.Fprintf(&response, "Error: Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
+				response.WriteString("\n")
+			}
+		}
+	}
+
+	return response.String()
 }

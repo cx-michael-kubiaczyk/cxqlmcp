@@ -2,10 +2,6 @@ package mcp
 
 import (
 	"fmt"
-	"strings"
-
-	"github.com/cxpsemea/Cx1ClientGo"
-	"github.com/cxpsemea/cxqlmcp/mcp/backend"
 )
 
 // given a full path to a finding, eg: https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName
@@ -18,9 +14,14 @@ func (m *MCP) CreateSessionFromURL(targetFinding string, tpFindings, tnFindings 
 		return fmt.Sprintf("Error: Failed to initialize session data: %v", err)
 	}
 
-	summary, err := m.backend.CreateTestEnvironment(result, scan, tpFindings, tnFindings)
+	err = m.backend.CreateTestEnvironment(result, scan, tpFindings, tnFindings)
 	if err != nil {
-		return fmt.Sprintf("Error: Failed to create test environment: %v\n%s", err, summary)
+		return fmt.Sprintf("Error: Failed to create test environment: %v", err)
+	}
+
+	summary, fails := m.backend.CheckControlProjects()
+	if fails > 0 {
+		return fmt.Sprintf("Error: %d control projects failed validation\n%s", fails, summary)
 	}
 
 	err = m.backend.CreateAuditSession()
@@ -142,7 +143,7 @@ func (m *MCP) RunQuery(language, group, query string) string {
 		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
-	return m.processAuditResults(executedQuery, &results, executedQuery.Source)
+	return m.backend.ProcessAuditResults(executedQuery, &results, executedQuery.Source)
 }
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
@@ -164,7 +165,7 @@ func (m *MCP) TestQuery(language, group, query, code string) string {
 		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
 	}
 
-	return m.processAuditResults(executedQuery, &results, code)
+	return m.backend.ProcessAuditResults(executedQuery, &results, code)
 }
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
@@ -187,111 +188,9 @@ func (m *MCP) SaveQuery(language, group, query, code string) string {
 	}
 
 	if len(results.FailedQueries) > 0 {
-		return m.processRunFailures(executedQuery, &results, code)
+		return m.backend.ProcessRunFailures(executedQuery, &results, code)
 	}
 	return fmt.Sprintf("Query %s.%s.%s saved.", language, group, query)
-}
-
-func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
-	if len(results.FailedQueries) > 0 {
-		return m.processRunFailures(executedQuery, results, code)
-	}
-
-	return m.processRunResults(executedQuery, results)
-}
-
-func (m *MCP) processRunResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
-	response := strings.Builder{}
-
-	if len(results.Results) > 0 {
-		for _, r := range results.Results {
-			vulns, err := m.backend.GetRunResults(r)
-			if err != nil {
-				fmt.Fprintf(&response, "Failed to get run result %s: %s", r.RunID, err)
-				response.WriteString("\n")
-			} else {
-				parts := strings.Split(r.Title, " ")
-				if len(parts) >= 1 {
-					queryName := parts[0]
-					var runQuery *Cx1ClientGo.SASTQuery
-					if strings.EqualFold(queryName, executedQuery.Name) {
-						runQuery = executedQuery
-					} else {
-						productQuery := m.backend.Queries.FindQuery(m.backend.Cx1Client.QueryTypeProduct(), "", executedQuery.Language, queryName, 0)
-						if productQuery != nil {
-							runQuery = productQuery
-						} else {
-							tenantQuery := m.backend.Queries.FindQuery(m.backend.Cx1Client.QueryTypeTenant(), "", executedQuery.Language, queryName, 0)
-							if tenantQuery != nil {
-								runQuery = tenantQuery
-							} else {
-								m.logger.Errorf("Failed to find %s query %s", executedQuery.Language, queryName)
-							}
-						}
-					}
-
-					if runQuery != nil {
-						queryName = runQuery.Name
-					} else {
-						queryName = "Unknown query " + queryName
-					}
-
-					fmt.Fprintf(&response, "Query %s.%s.%s ran with %d results.", runQuery.Language, runQuery.Group, runQuery.Name, len(vulns))
-					response.WriteString("\n")
-					for i, v := range vulns {
-						//fmt.Fprintf(&response, "%d: %+v", i, v)
-						//response.WriteString("\n")
-						if err := m.backend.VulnAugment(i, queryName, v); err != nil {
-							m.logger.Errorf("Failed to augment code with %s vuln %s", queryName, v)
-						}
-					}
-				} else {
-					m.logger.Infof("Failed to get query from title: %s", r.Title)
-				}
-			}
-		}
-
-		response.WriteString("\nSource code:\n")
-		response.WriteString(m.GetCodeSnippets())
-	}
-
-	return response.String()
-}
-
-func (m *MCP) processRunFailures(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
-	response := strings.Builder{}
-
-	if len(results.FailedQueries) > 0 {
-		//cs := backend.NewCodeSet()
-		for _, f := range results.FailedQueries {
-			q, err := m.backend.UpdateQueryByKey(f.QueryID)
-			if err != nil {
-				fmt.Fprintf(&response, "Error: Failed to retrieve query with key %s: %s", f.QueryID, err)
-				response.WriteString("\n")
-			}
-			var fs backend.FileSource
-			if q.EditorKey == executedQuery.EditorKey {
-				fs = backend.NewFileSource(code)
-			} else {
-				fs = backend.NewFileSource(q.Source)
-			}
-			if q != nil {
-				m.logger.Debugf("Query %s.%s.%s had the following errors: %+v", q.Language, q.Group, q.Name, f.Errors)
-				for _, e := range f.Errors {
-					fs.Augment("audit", "Error: "+e.Message, e.Line)
-				}
-
-				fmt.Fprintf(&response, "Error: The query %s.%s.%s ran with errors, shown inline in the code below.", q.Language, q.Group, q.Name)
-				response.WriteString("\n")
-				response.WriteString(fs.Code())
-			} else {
-				fmt.Fprintf(&response, "Error: Audit run result has unknown query with ID %s throwing errors.", f.QueryID)
-				response.WriteString("\n")
-			}
-		}
-	}
-
-	return response.String()
 }
 
 func (m *MCP) GetCurrentApplicationID() string {

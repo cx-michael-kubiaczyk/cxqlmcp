@@ -342,19 +342,93 @@ func findingsEqual(r *Cx1ClientGo.ScanSASTResult, v Cx1ClientGo.QueryVulnerabili
 	return false
 }
 
-func (m *MCPBackend) UpdateQueryCollection() error {
-	m.logger.Debugf("Updating query collection")
-	qc, err := m.Cx1Client.GetQueriesByLevelID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
-	if err != nil {
-		return fmt.Errorf("failed to get queries: %v", err)
+func (m *MCPBackend) configureCustomPreset() (Cx1ClientGo.Preset, error) {
+	presetName := "CxQL-" + m.Target.TestAppGUID
+	targetQueryCollection := Cx1ClientGo.SASTQueryCollection{}
+	query := m.Queries.GetQueryByID(m.Target.QueryID)
+	if query == nil {
+		return Cx1ClientGo.Preset{}, fmt.Errorf("unable to find target query %s with ID %d", m.Target.Result.Data.QueryName, m.Target.Result.Data.QueryID)
 	}
-	m.Queries.AddCollection(&qc)
+	targetQueryCollection.AddQuery(*query)
 
-	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
+	preset, err := m.Cx1Client.GetPresetByName("sast", presetName)
 	if err != nil {
-		return fmt.Errorf("failed to get audit queries: %v", err)
+		if strings.HasPrefix(err.Error(), "no such preset") {
+			preset, err = m.Cx1Client.CreateSASTPreset(presetName, "Test preset for CxQL MCP", targetQueryCollection)
+			if err != nil {
+				return Cx1ClientGo.Preset{}, fmt.Errorf("failed to create custom preset: %v", err)
+			}
+			return preset, nil
+		}
+		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to get custom preset: %v", err)
 	}
 
-	m.Queries.AddCollection(&aq)
-	return nil
+	preset.UpdateQueries(targetQueryCollection)
+	if err := m.Cx1Client.UpdateSASTPreset(preset); err != nil {
+		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to update custom preset: %v", err)
+	}
+	return preset, nil
+}
+
+// createAndScanProject creates one project inside the given application, assigns
+// it the given preset, uploads the given source zip, and triggers (but does not
+// poll) a scan. Returns the created project, the triggered (unpolled) scan, and
+// an error if any step failed.
+func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName string, sourceZip []byte, branch string) (Cx1ClientGo.Project, Cx1ClientGo.Scan, error) {
+	project, err := m.Cx1Client.CreateProjectInApplication(projectName, []string{}, map[string]string{}, applicationID)
+	if err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to create project: %v", err)
+	}
+
+	if err := m.Cx1Client.SetProjectPresetByID(project.ProjectID, presetName, false); err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to assign preset: %v", err)
+	}
+
+	uploadUrl, err := m.Cx1Client.UploadBytes(&sourceZip)
+	if err != nil {
+		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to upload source: %v", err)
+	}
+
+	if branch == "" {
+		branch = "main"
+	}
+	scanConfig := &Cx1ClientGo.ScanConfigurationSet{}
+	scanConfig.AddScanEngine("sast")
+	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, scanConfig.Configurations, map[string]string{})
+	if err != nil {
+		return project, scan, fmt.Errorf("failed to trigger scan: %v", err)
+	}
+	return project, scan, nil
+}
+
+// projectSpec describes one project to be created as part of a test environment:
+// either the target finding's project (Label == "Target") or a TP/TN control project.
+type projectSpec struct {
+	label           string
+	index           int
+	projectName     string
+	sourceProjectID string
+	sourceScanID    string
+}
+
+// specResult holds the outcome of creating+scanning one projectSpec.
+type specResult struct {
+	spec    projectSpec
+	project *Cx1ClientGo.Project
+	scan    *Cx1ClientGo.Scan
+	err     error
+}
+
+func (m *MCPBackend) checkControlFindingStatus(scanID string) (bool, error) {
+	results, err := m.Cx1Client.GetAllScanSASTResultsByID(scanID)
+	if err != nil {
+		return false, err
+	}
+
+	for _, r := range results {
+		if r.Data.QueryID == m.Target.QueryID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
