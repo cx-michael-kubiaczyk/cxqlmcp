@@ -46,6 +46,7 @@ func extractIDFromURL(path string) (ProjectID, ScanID, ResultID string, err erro
 	return
 }
 
+/*
 func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 	filter := Cx1ClientGo.ScanSASTResultsFilter{
 		BaseFilter: Cx1ClientGo.BaseFilter{Limit: 10},
@@ -63,7 +64,7 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 	}
 
 	result := results[0]
-	m.Result = &result
+	m.Target.Result = &result
 
 	m.logger.Debugf("Result: %+v", result)
 	for i, n := range result.Data.Nodes {
@@ -79,13 +80,9 @@ func (m *MCPBackend) createCodeExtract(sid, rid string) error {
 		m.ScanSources.AugmentFile(n.FileName, n.Line, AugSrc_Finding(result.Data.QueryName), fmt.Sprintf("step %d", i+1))
 	}
 
-	/*for file, source := range m.ScanSources.Files {
-		m.logger.Debugf("File: %s\n\n%s\n", file, strings.Join(source.code, "\n"))
-	}*/
-
 	return nil
-
 }
+*/
 
 /*
 func (m *MCPBackend) addFile(scanId, filePath string) error {
@@ -135,7 +132,7 @@ func (m *MCPBackend) getZip() []byte {
 */
 
 func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
-	if m.project == nil {
+	if m.Target.Project == nil {
 		return nil, fmt.Errorf("no project loaded")
 	}
 	var product, tenant, application, project *Cx1ClientGo.SASTQuery
@@ -160,12 +157,15 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 		return nil, fmt.Errorf("no query found for %s %s %s", language, group, name)
 	}
 
+	queryId := uint64(0)
+
 	if product != nil {
 		q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, product.EditorKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get product query source: %v", err)
 		}
 		product.MergeQuery(q)
+		queryId = q.QueryID
 	}
 
 	if tenant != nil {
@@ -174,13 +174,16 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 			return nil, fmt.Errorf("failed to get tenant query source: %v", err)
 		}
 		tenant.MergeQuery(q)
+		if queryId == 0 {
+			queryId = q.QueryID
+		}
 	}
 
-	if m.application != nil {
+	if m.Target.Application != nil {
 		application = m.Queries.GetQueryByLevelAndID(
 			m.Cx1Client.QueryTypeApplication(),
-			m.application.ApplicationID,
-			m.Result.Data.QueryID,
+			m.Target.Application.ApplicationID,
+			queryId,
 		)
 
 		if application != nil {
@@ -192,11 +195,11 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 		}
 	}
 
-	if m.project != nil {
+	if m.Target.Project != nil {
 		project = m.Queries.GetQueryByLevelAndID(
 			m.Cx1Client.QueryTypeProject(),
-			m.project.ProjectID,
-			m.Result.Data.QueryID,
+			m.Target.Project.ProjectID,
+			queryId,
 		)
 		if project != nil {
 			q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, project.EditorKey)
@@ -267,7 +270,7 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 		}
 	}
 
-	if m.application != nil && view[2] {
+	if m.Target.Application != nil && view[2] {
 		result.WriteString("\n[APPLICATION-LEVEL QUERY INFO]\n")
 		if app != nil {
 			result.WriteString(m.FormatQuery(app, edit[2]))
@@ -294,8 +297,8 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 
 func (m *MCPBackend) closestQuery() *Cx1ClientGo.SASTQuery {
 	for i := 3; i >= 0; i-- {
-		if m.targetQuery[i] != nil {
-			return m.targetQuery[i]
+		if m.Target.Query[i] != nil {
+			return m.Target.Query[i]
 		}
 	}
 	return nil
@@ -341,13 +344,13 @@ func findingsEqual(r *Cx1ClientGo.ScanSASTResult, v Cx1ClientGo.QueryVulnerabili
 
 func (m *MCPBackend) UpdateQueryCollection() error {
 	m.logger.Debugf("Updating query collection")
-	qc, err := m.Cx1Client.GetQueriesByLevelID(m.Cx1Client.QueryTypeProject(), m.project.ProjectID)
+	qc, err := m.Cx1Client.GetQueriesByLevelID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
 	if err != nil {
 		return fmt.Errorf("failed to get queries: %v", err)
 	}
 	m.Queries.AddCollection(&qc)
 
-	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.project.ProjectID)
+	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
 	if err != nil {
 		return fmt.Errorf("failed to get audit queries: %v", err)
 	}

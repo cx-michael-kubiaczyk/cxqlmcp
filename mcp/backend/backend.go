@@ -9,20 +9,25 @@ import (
 )
 
 type MCPBackend struct {
-	Cx1Client       *Cx1ClientGo.Cx1Client
-	project         *Cx1ClientGo.Project
-	application     *Cx1ClientGo.Application
-	scan            *Cx1ClientGo.Scan
-	Result          *Cx1ClientGo.ScanSASTResult
-	Vuln            *Cx1ClientGo.QueryVulnerability
-	session         *Cx1ClientGo.AuditSession
-	logger          *logrus.Logger
-	ScanSources     CodeSet
-	Queries         Cx1ClientGo.SASTQueryCollection
-	descriptions    map[uint64]Cx1ClientGo.SASTQueryDescription
-	targetQuery     []*Cx1ClientGo.SASTQuery
-	testAppGUID     string
+	Cx1Client *Cx1ClientGo.Cx1Client
+	Target    struct {
+		Project     *Cx1ClientGo.Project
+		Application *Cx1ClientGo.Application
+		Result      *Cx1ClientGo.ScanSASTResult
+		Scan        *Cx1ClientGo.Scan
+		TestAppGUID string
+		Query       []*Cx1ClientGo.SASTQuery
+		QueryID     uint64
+	}
 	ControlProjects []ControlProject
+
+	Vuln    *Cx1ClientGo.QueryVulnerability
+	session *Cx1ClientGo.AuditSession
+
+	logger       *logrus.Logger
+	ScanSources  CodeSet
+	Queries      Cx1ClientGo.SASTQueryCollection
+	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
 }
 
 // ControlProject represents a TP/TN reference project cloned into the test
@@ -46,69 +51,63 @@ func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBack
 	}
 }
 
-func (m *MCPBackend) Initialize(path string) error {
+func (m *MCPBackend) Initialize(path string) (*Cx1ClientGo.ScanSASTResult, *Cx1ClientGo.Scan, error) {
 	m.logger.Debug("Getting query collection")
 	qc, err := m.Cx1Client.GetSASTQueryCollection()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	m.Queries = qc
 
-	pid, sid, rid, err := extractIDFromURL(path)
+	_, sid, rid, err := extractIDFromURL(path)
 	if err != nil {
-		return err
-	}
-
-	project, err := m.Cx1Client.GetProjectByID(pid)
-	if err != nil {
-		return fmt.Errorf("failed to get project: %v", err)
-	}
-	m.project = &project
-
-	if len(*project.Applications) == 1 {
-		app, err := m.Cx1Client.GetApplicationByID((*project.Applications)[0])
-		if err != nil {
-			return fmt.Errorf("failed to get application: %v", err)
-		}
-		m.application = &app
+		return nil, nil, err
 	}
 
 	scan, err := m.Cx1Client.GetScanByID(sid)
 	if err != nil {
-		return fmt.Errorf("failed to get scan: %v", err)
+		return nil, nil, fmt.Errorf("failed to get scan: %v", err)
 	}
-	m.scan = &scan
 
-	err = m.createCodeExtract(sid, rid)
+	filter := Cx1ClientGo.ScanSASTResultsFilter{
+		BaseFilter: Cx1ClientGo.BaseFilter{Limit: 10},
+		ScanID:     sid,
+		ResultIDs:  []string{rid},
+	}
+
+	_, results, err := m.Cx1Client.GetAllScanSASTResultsFiltered(filter)
 	if err != nil {
-		return fmt.Errorf("failed to create code extract: %v", err)
+		return nil, nil, fmt.Errorf("failed to get results: %v", err)
 	}
 
-	return nil
+	if len(results) != 1 {
+		return nil, nil, fmt.Errorf("expected 1 result, got %d", len(results))
+	}
+
+	m.Target.QueryID = results[0].Data.QueryID
+
+	return &results[0], &scan, nil
 }
 
 func (m *MCPBackend) GetCurrentProjectID() string {
-	if m.project == nil {
+	if m.Target.Project == nil {
 		return "Error: no project configured"
 	}
-	return m.project.ProjectID
+	return m.Target.Project.ProjectID
 }
 func (m *MCPBackend) GetCurrentApplicationID() string {
-	if m.application == nil {
+	if m.Target.Application == nil {
 		return "Error: no application configured"
 	}
-	return m.application.ApplicationID
+	return m.Target.Application.ApplicationID
 }
 
-func (m *MCPBackend) ConfigureCustomPreset(presetName string) (Cx1ClientGo.Preset, error) {
-	if m.Result == nil {
-		return Cx1ClientGo.Preset{}, fmt.Errorf("failed to initialize, no result in scope")
-	}
-
+func (m *MCPBackend) configureCustomPreset() (Cx1ClientGo.Preset, error) {
+	presetName := "CxQL-" + m.Target.TestAppGUID
 	targetQueryCollection := Cx1ClientGo.SASTQueryCollection{}
-	query := m.Queries.GetQueryByID(m.Result.Data.QueryID)
+	query := m.Queries.GetQueryByID(m.Target.QueryID)
 	if query == nil {
-		return Cx1ClientGo.Preset{}, fmt.Errorf("unable to find target query %s with ID %d", m.Result.Data.QueryName, m.Result.Data.QueryID)
+		return Cx1ClientGo.Preset{}, fmt.Errorf("unable to find target query %s with ID %d", m.Target.Result.Data.QueryName, m.Target.Result.Data.QueryID)
 	}
 	targetQueryCollection.AddQuery(*query)
 
@@ -153,7 +152,9 @@ func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName
 	if branch == "" {
 		branch = "main"
 	}
-	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, []Cx1ClientGo.ScanConfiguration{}, map[string]string{})
+	scanConfig := &Cx1ClientGo.ScanConfigurationSet{}
+	scanConfig.AddScanEngine("sast")
+	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, scanConfig.Configurations, map[string]string{})
 	if err != nil {
 		return project, scan, fmt.Errorf("failed to trigger scan: %v", err)
 	}
@@ -168,14 +169,13 @@ type projectSpec struct {
 	projectName     string
 	sourceProjectID string
 	sourceScanID    string
-	sourceBranch    string
 }
 
 // specResult holds the outcome of creating+scanning one projectSpec.
 type specResult struct {
 	spec    projectSpec
-	project Cx1ClientGo.Project
-	scan    Cx1ClientGo.Scan
+	project *Cx1ClientGo.Project
+	scan    *Cx1ClientGo.Scan
 	err     error
 }
 
@@ -187,24 +187,24 @@ type specResult struct {
 // project/app/scan so subsequent audit-session calls operate on the copy.
 // Returns a human-readable per-project summary, and an error only if the target
 // project/scan itself failed (TP/TN failures are reported in the summary only).
-func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (string, error) {
-	if m.project == nil || m.scan == nil {
-		return "", fmt.Errorf("no target project/scan loaded, call Initialize first")
+func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, scan *Cx1ClientGo.Scan, tpFindings, tnFindings []string) (string, error) {
+	if scan == nil || result == nil {
+		return "", fmt.Errorf("no target project/scan loaded")
 	}
 
 	guid, err := newShortID(10)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate test id: %v", err)
 	}
-	m.testAppGUID = guid
+	m.Target.TestAppGUID = guid
 
 	app, err := m.Cx1Client.CreateApplication("CxQL-" + guid)
 	if err != nil {
 		return "", fmt.Errorf("failed to create test application: %v", err)
 	}
+	m.Target.Application = &app
 
-	presetName := "CxQL-" + guid
-	if _, err := m.ConfigureCustomPreset(presetName); err != nil {
+	if _, err := m.configureCustomPreset(); err != nil {
 		return "", fmt.Errorf("failed to configure preset: %v", err)
 	}
 
@@ -213,9 +213,8 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 			label:           "Target",
 			index:           0,
 			projectName:     "CxQL-Target-" + guid,
-			sourceProjectID: m.project.ProjectID,
-			sourceScanID:    m.scan.ScanID,
-			sourceBranch:    m.project.MainBranch,
+			sourceProjectID: scan.ProjectID,
+			sourceScanID:    scan.ScanID,
 		},
 	}
 
@@ -225,17 +224,12 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 			if err != nil {
 				return fmt.Errorf("failed to parse %s url %q: %v", label, u, err)
 			}
-			sourceProject, err := m.Cx1Client.GetProjectByID(pid)
-			if err != nil {
-				return fmt.Errorf("failed to get %s source project %s: %v", label, pid, err)
-			}
 			specs = append(specs, projectSpec{
 				label:           label,
 				index:           i + 1,
 				projectName:     fmt.Sprintf("CxQL-%s-%d-%s", label, i+1, guid),
 				sourceProjectID: pid,
 				sourceScanID:    sid,
-				sourceBranch:    sourceProject.MainBranch,
 			})
 		}
 		return nil
@@ -243,20 +237,32 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 	if err := appendSpecs("TP", tpFindings); err != nil {
 		return "", err
 	}
-	if err := appendSpecs("TN", tnFindings); err != nil {
-		return "", err
+	for i, sid := range tnFindings {
+		scan, err := m.Cx1Client.GetScanByID(sid)
+		if err != nil {
+			return "", fmt.Errorf("failed to get TN source scan %s: %v", sid, err)
+		}
+
+		specs = append(specs, projectSpec{
+			label:           "TN",
+			index:           i + 1,
+			projectName:     fmt.Sprintf("CxQL-%s-%d-%s", "TN", i+1, guid),
+			sourceProjectID: scan.ProjectID,
+			sourceScanID:    sid,
+		})
 	}
 
 	// First pass: trigger every project's scan without waiting.
 	results := make([]specResult, len(specs))
 	for i, spec := range specs {
+		m.logger.Debugf("Processing %s %d: source scan ID %s", spec.label, spec.index, spec.sourceScanID)
 		sourceZip, err := m.Cx1Client.GetScanSourcesByID(spec.sourceScanID)
 		if err != nil {
 			results[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
 			continue
 		}
-		project, scan, err := m.createAndScanProject(app.ApplicationID, spec.projectName, presetName, sourceZip, spec.sourceBranch)
-		results[i] = specResult{spec: spec, project: project, scan: scan, err: err}
+		project, scan, err := m.createAndScanProject(app.ApplicationID, spec.projectName, "CxQL-"+m.Target.TestAppGUID, sourceZip, "test")
+		results[i] = specResult{spec: spec, project: &project, scan: &scan, err: err}
 	}
 
 	// Second pass: poll every scan that was triggered successfully.
@@ -264,12 +270,12 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 		if results[i].err != nil {
 			continue
 		}
-		polled, err := m.Cx1Client.ScanPolling(&results[i].scan)
+		polled, err := m.Cx1Client.ScanPollingDetailed(results[i].scan)
 		if err != nil {
 			results[i].err = fmt.Errorf("scan polling failed: %v", err)
 			continue
 		}
-		results[i].scan = polled
+		results[i].scan = &polled
 	}
 
 	summary := strings.Builder{}
@@ -299,9 +305,8 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 		fmt.Fprintf(&summary, "%s: created project %s (%s), scan %s status %s\n", name, r.spec.projectName, r.project.ProjectID, r.scan.ScanID, r.scan.Status)
 
 		if r.spec.label == "Target" {
-			m.project = &r.project
-			m.application = &app
-			m.scan = &r.scan
+			m.Target.Project = r.project
+			m.Target.Scan = r.scan
 		} else {
 			m.ControlProjects = append(m.ControlProjects, ControlProject{
 				Label:           r.spec.label,
@@ -319,6 +324,23 @@ func (m *MCPBackend) CreateTestEnvironment(tpFindings, tnFindings []string) (str
 	if targetErr != nil {
 		return summary.String(), fmt.Errorf("failed to create target project: %v", targetErr)
 	}
+
+	if results[0].err != nil {
+		return summary.String(), fmt.Errorf("target FP repro scan failed: %s", results[0].err)
+	}
+
+	scanresults, err := m.Cx1Client.GetAllScanSASTResultsByID(results[0].scan.ScanID)
+	if err != nil {
+		return summary.String(), fmt.Errorf("failed to get scan results for target repro scan %s: %s", results[0].scan.ScanID, err)
+	}
+
+	for _, r := range scanresults {
+		if r.SimilarityID == result.SimilarityID && r.Data.QueryID == result.Data.QueryID {
+			m.Target.Result = &r
+			break
+		}
+	}
+
 	return summary.String(), nil
 }
 
@@ -332,7 +354,7 @@ func (m *MCPBackend) CreateAuditSession() error {
 	if m.session != nil {
 		m.endSession()
 	}
-	session, err := m.Cx1Client.GetAuditSessionByID("sast", m.project.ProjectID, m.scan.ScanID)
+	session, err := m.Cx1Client.GetAuditSessionByID("sast", m.Target.Project.ProjectID, m.Target.Scan.ScanID)
 	if err != nil {
 		return fmt.Errorf("failed to get audit session: %v", err)
 	}
@@ -342,13 +364,13 @@ func (m *MCPBackend) CreateAuditSession() error {
 		return err
 	}
 
-	query := m.Queries.GetQueryByID(m.Result.Data.QueryID)
+	query := m.Queries.GetQueryByID(m.Target.Result.Data.QueryID)
 	if query == nil {
-		return fmt.Errorf("failed to find query with ID %d", m.Result.Data.QueryID)
+		return fmt.Errorf("failed to find query with ID %d", m.Target.Result.Data.QueryID)
 	}
 	m.logger.Debugf("Finding is from query %s", query.String())
 
-	m.targetQuery, err = m.GetQueryHierarchy(query.Language, query.Group, query.Name)
+	m.Target.Query, err = m.GetQueryHierarchy(query.Language, query.Group, query.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get query hierarchy: %v", err)
 	}
@@ -363,14 +385,14 @@ func (m *MCPBackend) CheckFindingStatus() (bool, error) {
 		return false, fmt.Errorf("failed to run query: %v", err)
 	}
 
-	m.logger.Debugf("Looking for finding: %+v", m.Result)
+	m.logger.Debugf("Looking for finding: %+v", m.Target.Result)
 	for _, r := range result.Results {
 		vulns, err := m.GetRunResults(r)
 		if err != nil {
 			return false, fmt.Errorf("Error getting results: %s", err)
 		} else {
 			for _, v := range vulns {
-				if findingsEqual(m.Result, v) {
+				if findingsEqual(m.Target.Result, v) {
 					m.Vuln = &v
 					return true, nil
 				}
@@ -455,7 +477,7 @@ func (m MCPBackend) GetCodeSnippets() string {
 func (m *MCPBackend) VulnAugment(number int, query string, vuln Cx1ClientGo.QueryVulnerability) error {
 	for i, v := range vuln.Nodes {
 		if !m.ScanSources.HasFile(v.FileID) {
-			fileSource, err := m.Cx1Client.GetScannedFileSourceByID(m.scan.ScanID, v.FileID)
+			fileSource, err := m.Cx1Client.GetScannedFileSourceByID(m.Target.Scan.ScanID, v.FileID)
 			if err != nil {
 				return fmt.Errorf("failed to get file source: %v", err)
 			}
@@ -488,5 +510,5 @@ func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.
 		return nil, err
 	}
 
-	return m.Queries.GetQueryByLevelAndID(m.Cx1Client.QueryTypeProject(), m.project.ProjectID, query.QueryID), nil
+	return m.Queries.GetQueryByLevelAndID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID, query.QueryID), nil
 }

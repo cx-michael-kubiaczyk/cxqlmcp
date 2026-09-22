@@ -13,12 +13,12 @@ import (
 // the tpFindings represent other projects with true-positive (and true-negative) findings of the same type
 // those other projects will be cloned into a new testing application generated for this run
 func (m *MCP) CreateSessionFromURL(targetFinding string, tpFindings, tnFindings []string) string {
-	err := m.backend.Initialize(targetFinding)
+	result, scan, err := m.backend.Initialize(targetFinding)
 	if err != nil {
 		return fmt.Sprintf("Error: Failed to initialize session data: %v", err)
 	}
 
-	summary, err := m.backend.CreateTestEnvironment(tpFindings, tnFindings)
+	summary, err := m.backend.CreateTestEnvironment(result, scan, tpFindings, tnFindings)
 	if err != nil {
 		return fmt.Sprintf("Error: Failed to create test environment: %v\n%s", err, summary)
 	}
@@ -33,7 +33,7 @@ func (m *MCP) CreateSessionFromURL(targetFinding string, tpFindings, tnFindings 
 		return fmt.Sprintf("Error: Failed to check finding status: %v\n%s", err, summary)
 	}
 	if !present {
-		return fmt.Sprintf("Error: The session was created, but the scan in web-audit did not find this finding: %s\n%s", m.backend.Result.String(), summary)
+		return fmt.Sprintf("Error: The session was created, but the scan in web-audit did not find this finding: %s\n%s", m.backend.Target.Result.String(), summary)
 	}
 
 	return fmt.Sprintf("The session was created successfully and the finding is present.\n\n%s", summary)
@@ -47,22 +47,22 @@ func (m *MCP) GetCurrentState() string {
 	result := ""
 	result += m.GetFindingDetails() + "\n"
 	result += m.GetCodeSnippets() + "\n"
-	result += m.GetQueryInfo(m.backend.Result.Data.LanguageName, m.backend.Result.Data.Group, m.backend.Result.Data.QueryName)
+	result += m.GetQueryInfo(m.backend.Target.Result.Data.LanguageName, m.backend.Target.Result.Data.Group, m.backend.Target.Result.Data.QueryName)
 
 	return result
 }
 
 // return the explanation of the finding eg: Missing_HSTS description + recommendation
 func (m *MCP) GetFindingDetails() string {
-	if m.backend.Result == nil {
+	if m.backend.Target.Result == nil {
 		return "Error: No finding details available"
 	}
 
-	details, err := m.backend.GetQueryDescription(m.backend.Result.Data.QueryID)
+	details, err := m.backend.GetQueryDescription(m.backend.Target.Result.Data.QueryID)
 	if err != nil {
 		return fmt.Sprintf("Error: Failed to get finding details: %s", err)
 	}
-	return fmt.Sprintf("A false-positive finding %s.%s.%s was found in the source code.\nDescription: %s\nRisk: %s\nRecommendation: %s", m.backend.Result.Data.LanguageName, m.backend.Result.Data.Group, m.backend.Result.Data.QueryName, details.ResultDescription, details.Risk, details.GeneralRecommendations)
+	return fmt.Sprintf("A false-positive finding %s.%s.%s was found in the source code.\nDescription: %s\nRisk: %s\nRecommendation: %s", m.backend.Target.Result.Data.LanguageName, m.backend.Target.Result.Data.Group, m.backend.Target.Result.Data.QueryName, details.ResultDescription, details.Risk, details.GeneralRecommendations)
 }
 
 // returns the source code involved in the finding or query dataflow
@@ -125,15 +125,9 @@ func (m *MCP) CheckControlProjects() string {
 	return "Error: unimplemented"
 }
 
-// creates a new preset that includes only the target query
-// automatically sets all control projects to use the preset
-func (m *MCP) ConfigureCustomPreset(name string) string {
-	return "Error: unimplemented"
-}
-
 // runs an existing query and returns the results (which may be multiple dataflow paths)
 func (m *MCP) RunQuery(language, group, query string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
 	if executedQuery == nil {
 		return "Error: The query %s.%s.%s does not exist"
 	}
@@ -153,7 +147,7 @@ func (m *MCP) RunQuery(language, group, query string) string {
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
 func (m *MCP) TestQuery(language, group, query, code string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
 	if executedQuery == nil {
 		return "Error: The query %s.%s.%s does not exist"
 	}
@@ -175,7 +169,7 @@ func (m *MCP) TestQuery(language, group, query, code string) string {
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
 func (m *MCP) SaveQuery(language, group, query, code string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Result.ProjectID, language, group, query)
+	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
 	if executedQuery == nil {
 		return "Error: The query %s.%s.%s does not exist"
 	}
@@ -203,10 +197,10 @@ func (m *MCP) processAuditResults(executedQuery *Cx1ClientGo.SASTQuery, results 
 		return m.processRunFailures(executedQuery, results, code)
 	}
 
-	return m.processRunResults(executedQuery, results, code)
+	return m.processRunResults(executedQuery, results)
 }
 
-func (m *MCP) processRunResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun, code string) string {
+func (m *MCP) processRunResults(executedQuery *Cx1ClientGo.SASTQuery, results *Cx1ClientGo.QueryRun) string {
 	response := strings.Builder{}
 
 	if len(results.Results) > 0 {
