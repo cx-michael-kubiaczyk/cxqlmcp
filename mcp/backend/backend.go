@@ -179,12 +179,17 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 	scans := make([]specResult, len(specs))
 	for i, spec := range specs {
 		m.logger.Debugf("Processing %s %d: source scan ID %s", spec.label, spec.index, spec.sourceScanID)
-		sourceZip, err := m.Cx1Client.GetScanSourcesByID(spec.sourceScanID)
+		sourceZip, err := m.getScanSourceZip(spec.sourceScanID)
 		if err != nil {
 			scans[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
 			continue
 		}
-		project, scan, err := m.createAndScanProject(app.ApplicationID, spec.projectName, "CxQL-"+m.Target.TestAppGUID, sourceZip, "test")
+		project, err := m.createProject(app.ApplicationID, spec.projectName, "CxQL-"+m.Target.TestAppGUID)
+		if err != nil {
+			scans[i] = specResult{spec: spec, err: err}
+			continue
+		}
+		scan, err := m.scanProject(project.ProjectID, sourceZip, "test")
 		scans[i] = specResult{spec: spec, project: &project, scan: &scan, err: err}
 	}
 
@@ -350,6 +355,51 @@ func (m *MCPBackend) CheckControlProjects() (string, int) {
 	}
 
 	return summary.String(), fails
+}
+
+// ScanControlProjects re-scans every control project using its cached source zip,
+// against whatever query overrides are currently in effect. Call this after saving
+// a query change, then call CheckControlProjects to re-validate TP/TN status
+// against the fresh scans. Per-project failures are recorded on that project's
+// ScanStatus and do not abort the others; only a fatal error (no control projects
+// configured) is returned.
+func (m *MCPBackend) ScanControlProjects() error {
+	if len(m.ControlProjects) == 0 {
+		return fmt.Errorf("no control projects configured for this session")
+	}
+
+	scans := make([]Cx1ClientGo.Scan, len(m.ControlProjects))
+	for i, cp := range m.ControlProjects {
+		if cp.ProjectID == "" {
+			continue // failed during CreateTestEnvironment; nothing to rescan
+		}
+		sourceZip, err := m.getScanSourceZip(cp.SourceScanID)
+		if err != nil {
+			m.ControlProjects[i].ScanStatus = "failed: " + err.Error()
+			continue
+		}
+		scan, err := m.scanProject(cp.ProjectID, sourceZip, "test")
+		if err != nil {
+			m.ControlProjects[i].ScanStatus = "failed: " + err.Error()
+			continue
+		}
+		scans[i] = scan
+	}
+
+	for i := range scans {
+		if m.ControlProjects[i].ProjectID == "" || scans[i].ScanID == "" {
+			continue
+		}
+		polled, err := m.Cx1Client.ScanPollingDetailed(&scans[i])
+		if err != nil {
+			m.ControlProjects[i].ScanStatus = "failed: scan polling: " + err.Error()
+			continue
+		}
+		m.ControlProjects[i].ScanID = polled.ScanID
+		m.ControlProjects[i].ScanStatus = polled.Status
+	}
+
+	return nil
 }
 
 func (m *MCPBackend) GetRunResults(result Cx1ClientGo.QueryRunResult) ([]Cx1ClientGo.QueryVulnerability, error) {

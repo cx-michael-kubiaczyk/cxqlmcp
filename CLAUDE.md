@@ -55,7 +55,7 @@ The `util_test.go` tests require `queries.json` (3.6 MB fixture, gitignored). Th
 
 - **MCP transport is wired**: `MCP.Start()` runs `m.server.Run(ctx, &mcpsdk.StdioTransport{})` — this is a real stdio MCP server, not a stub. Logging is sent to stderr specifically so it doesn't corrupt the stdio transport on stdout.
 
-- **`SearchCode()` and `ShowSourceCode()`** in `tools.go` are still stubs (return `""`). `SaveQuery()` is implemented. `CheckControlProjects()` and `CreateCustomPreset()` are placeholders that return `"Error: unimplemented"` — part of an in-progress feature to clone true-positive/true-negative "control projects" into a scratch test application for validating query changes (see the `todo` comments in `CreateSessionFromURL`).
+- **`SearchCode()` and `ShowSourceCode()`** in `tools.go` are still stubs (return `""`). Everything else is implemented: true-positive/true-negative "control projects" are cloned into a scratch test application by `CreateTestEnvironment`, exposed to the LLM as the `check_control_projects` (validate against each control project's most recent scan) and `scan_control_projects` (re-scan every control project against the current query overrides, then validate) tools, backed by `backend.CheckControlProjects`/`backend.ScanControlProjects`. Source zips downloaded via `GetScanSourcesByID` are cached on disk under `./data/<scanID>.zip` (`backend.getScanSourceZip`) so re-scanning a control project doesn't re-download its source.
 
 - **Query hierarchy index convention**: `GetQueryHierarchy` always returns `[product, tenant, application, project]` (indices 0–3). Nil means no override at that level. `FormatQueryHierarchy` and `closestQuery` depend on this convention.
 

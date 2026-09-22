@@ -4,10 +4,37 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 )
+
+const cacheDir = "./data"
+
+// getScanSourceZip returns the source zip for scanID, using a local ./data cache
+// to avoid re-downloading the same bytes from Cx1's repo store on every re-scan.
+func (m *MCPBackend) getScanSourceZip(scanID string) ([]byte, error) {
+	cachePath := filepath.Join(cacheDir, scanID+".zip")
+	if data, err := os.ReadFile(cachePath); err == nil {
+		return data, nil
+	}
+
+	data, err := m.Cx1Client.GetScanSourcesByID(scanID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		m.logger.Errorf("failed to create cache dir %s: %v", cacheDir, err)
+		return data, nil
+	}
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		m.logger.Errorf("failed to write cache file %s: %v", cachePath, err)
+	}
+	return data, nil
+}
 
 const guidCharset = "abcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -370,23 +397,28 @@ func (m *MCPBackend) configureCustomPreset() (Cx1ClientGo.Preset, error) {
 	return preset, nil
 }
 
-// createAndScanProject creates one project inside the given application, assigns
-// it the given preset, uploads the given source zip, and triggers (but does not
-// poll) a scan. Returns the created project, the triggered (unpolled) scan, and
-// an error if any step failed.
-func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName string, sourceZip []byte, branch string) (Cx1ClientGo.Project, Cx1ClientGo.Scan, error) {
+// createProject creates one project inside the given application and assigns
+// it the given preset. The preset assignment persists for future scans of the
+// same project, so it only needs to be set once here.
+func (m *MCPBackend) createProject(applicationID, projectName, presetName string) (Cx1ClientGo.Project, error) {
 	project, err := m.Cx1Client.CreateProjectInApplication(projectName, []string{}, map[string]string{}, applicationID)
 	if err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to create project: %v", err)
+		return project, fmt.Errorf("failed to create project: %v", err)
 	}
-
 	if err := m.Cx1Client.SetProjectPresetByID(project.ProjectID, presetName, false); err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to assign preset: %v", err)
+		return project, fmt.Errorf("failed to assign preset: %v", err)
 	}
+	return project, nil
+}
 
+// scanProject uploads sourceZip to an existing project and triggers (but does not
+// poll) a scan using whatever preset is currently assigned to the project. This is
+// reusable both for a project's initial scan and for later re-scans (e.g. by
+// ScanControlProjects) after a query override has changed.
+func (m *MCPBackend) scanProject(projectID string, sourceZip []byte, branch string) (Cx1ClientGo.Scan, error) {
 	uploadUrl, err := m.Cx1Client.UploadBytes(&sourceZip)
 	if err != nil {
-		return project, Cx1ClientGo.Scan{}, fmt.Errorf("failed to upload source: %v", err)
+		return Cx1ClientGo.Scan{}, fmt.Errorf("failed to upload source: %v", err)
 	}
 
 	if branch == "" {
@@ -394,11 +426,11 @@ func (m *MCPBackend) createAndScanProject(applicationID, projectName, presetName
 	}
 	scanConfig := &Cx1ClientGo.ScanConfigurationSet{}
 	scanConfig.AddScanEngine("sast")
-	scan, err := m.Cx1Client.ScanProjectZipByID(project.ProjectID, uploadUrl, branch, scanConfig.Configurations, map[string]string{})
+	scan, err := m.Cx1Client.ScanProjectZipByID(projectID, uploadUrl, branch, scanConfig.Configurations, map[string]string{})
 	if err != nil {
-		return project, scan, fmt.Errorf("failed to trigger scan: %v", err)
+		return scan, fmt.Errorf("failed to trigger scan: %v", err)
 	}
-	return project, scan, nil
+	return scan, nil
 }
 
 // projectSpec describes one project to be created as part of a test environment:

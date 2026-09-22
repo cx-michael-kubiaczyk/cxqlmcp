@@ -34,7 +34,7 @@ When addressing false-positive results in a finding, the process follows these s
 3. Examine any other queries and their overrides if they are part of the target query's call chains.
 4. Run any queries involved in the target query's call chain to identify points of improvement.
 5. Update existing overrides, or create new overrides (preferring Project-level overrides first, then Application, then Tenant) to improve the results and address the original false positive result.
-6. Test the updated queries to evaluate the result.
+6. Test the updated queries to evaluate the result. After saving an override, call scan_control_projects (which re-scans every TP/TN control project and re-validates them) or check_control_projects (which re-validates against each control project's most recent scan) to confirm the change doesn't break true positives or reintroduce false positives.
 7. Repeat the process as needed until the false positive is removed.
 `,
 	}
@@ -113,6 +113,20 @@ func (m *MCP) registerTools() {
 		Description: "Re-runs the original query in the audit session to determine whether the finding is still present.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
 		return textResult(m.CheckOriginalFinding()), nil, nil
+	})
+
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "check_control_projects",
+		Description: "Checks whether TP/TN control projects still correctly detect (or don't detect) the target query, based on their most recent scan.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.CheckControlProjects()), nil, nil
+	})
+
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "scan_control_projects",
+		Description: "Re-scans every TP/TN control project against the current query overrides, then re-validates them. Use this after saving a query change to confirm it doesn't break true positives or reintroduce false positives.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.ScanControlProjects()), nil, nil
 	})
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{

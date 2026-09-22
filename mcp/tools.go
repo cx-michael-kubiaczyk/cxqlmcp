@@ -119,11 +119,25 @@ func (m *MCP) CheckOriginalFinding() string {
 	return "Finding is present"
 }
 
-// checks if the in-scope finding is present in Control projects
-// Control projects are other projects that exist in the currently-targeted project's Application
-// Control projects should be named with a prefix: TP, FP, TN, FN
+// checks if the in-scope finding is present in each control project (TP projects
+// should find it, TN projects should not), based on each control project's most
+// recent scan.
 func (m *MCP) CheckControlProjects() string {
-	return "Error: unimplemented"
+	summary, fails := m.backend.CheckControlProjects()
+	if fails > 0 {
+		return fmt.Sprintf("%d control projects failed validation.\n%s", fails, summary)
+	}
+	return fmt.Sprintf("All control projects passed validation.\n%s", summary)
+}
+
+// re-scans every control project (using the currently active query overrides)
+// and then re-validates them, so a query edit can be checked against the TP/TN
+// control projects without re-checking the original finding.
+func (m *MCP) ScanControlProjects() string {
+	if err := m.backend.ScanControlProjects(); err != nil {
+		return fmt.Sprintf("Error: Failed to scan control projects: %v", err)
+	}
+	return m.CheckControlProjects()
 }
 
 // runs an existing query and returns the results (which may be multiple dataflow paths)
