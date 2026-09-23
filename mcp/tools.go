@@ -116,6 +116,23 @@ func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bo
 	return m.backend.FormatQueryHierarchy(queries, view, edit)
 }
 
+// returns only the source code for a query at a specific hierarchy level, eg: Missing_HSTS_Header at the Project level
+func (m *MCP) GetQueryCode(level, language, group, query string) string {
+	level, levelID := m.getLevels(level)
+
+	targetQuery := m.backend.Queries.GetQueryByLevelAndName(level, levelID, language, group, query)
+	if targetQuery == nil {
+		return "Query doesn't exist"
+	}
+
+	source, err := m.backend.GetQuerySource(targetQuery)
+	if err != nil {
+		return fmt.Sprintf("Error: Failed to retrieve the query's source code: %s", err)
+	}
+
+	return fmt.Sprintf("```csharp\n%s\n```\n", source)
+}
+
 // checks if the original finding is found in the audit session or not
 func (m *MCP) CheckOriginalFinding() string {
 	present, err := m.backend.CheckFindingStatus()

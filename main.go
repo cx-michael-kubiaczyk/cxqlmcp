@@ -38,6 +38,7 @@ func main() {
 		transport := &http.Transport{}
 		transport.Proxy = http.ProxyURL(proxyURL)
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport.DisableKeepAlives = true
 		httpClient.Transport = transport
 		logger.Infof("Using proxy")
 	}
@@ -289,8 +290,12 @@ func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	testPrint(logger, "Save no-result override of Find_HSTS_Sanitize",
 		server.SaveQuery(mcp.QUERY_LEVEL_APPLICATION, "JavaScript", "General", "Find_HSTS_Sanitize", "result = All.NewCxList();"),
 	)
+	testPrint(logger, "Get saved query source",
+		server.GetQueryCode(mcp.QUERY_LEVEL_APPLICATION, "JavaScript", "General", "Find_HSTS_Sanitize"),
+	)
 
 	testPrint(logger, "Test saved query",
 		server.ScanControlProjects(),
 	)
+
 }

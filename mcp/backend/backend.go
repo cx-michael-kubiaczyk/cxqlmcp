@@ -422,10 +422,11 @@ func (m *MCPBackend) GetRunResults(result Cx1ClientGo.QueryRunResult) ([]Cx1Clie
 func (m *MCPBackend) GetQuerySource(query *Cx1ClientGo.SASTQuery) (string, error) {
 	q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, query.EditorKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to get project query source: %v", err)
+		return "", fmt.Errorf("failed to get query source: %v", err)
 	}
 	query.MergeQuery(q)
 	query.Source = q.Source
+	m.Queries.AddQuery(*query)
 	return q.Source, nil
 }
 
@@ -534,7 +535,7 @@ func (m *MCPBackend) UpdateQueryCollection() error {
 	}
 	m.Queries.AddCollection(&qc)
 
-	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject())
+	aq, err := m.Cx1Client.GetAllAuditSASTQueries(m.session)
 	if err != nil {
 		return fmt.Errorf("failed to get audit queries: %v", err)
 	}

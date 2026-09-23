@@ -110,6 +110,13 @@ func (m *MCP) registerTools() {
 	})
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "get_query_code",
+		Description: "Returns only the CxQL source code for a query at a specific hierarchy level (Product/Tenant/Application/Project), without the full override hierarchy.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input queryInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.GetQueryCode(input.Level, input.Language, input.Group, input.Name)), nil, nil
+	})
+
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
 		Name:        "check_original_finding",
 		Description: "Re-runs the original query in the audit session to determine whether the finding is still present.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
