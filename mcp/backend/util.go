@@ -187,6 +187,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	queryId := uint64(0)
 
 	if product != nil {
+		m.logger.Debugf("Got product query %s", product.StringDetailed())
 		q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, product.EditorKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get product query source: %v", err)
@@ -196,6 +197,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 	}
 
 	if tenant != nil {
+		m.logger.Debugf("Got tenant query %s", tenant.StringDetailed())
 		q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, tenant.EditorKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tenant query source: %v", err)
@@ -214,6 +216,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 		)
 
 		if application != nil {
+			m.logger.Debugf("Got application query %s", application.StringDetailed())
 			q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, application.EditorKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get application query source: %v", err)
@@ -229,6 +232,7 @@ func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1Clie
 			queryId,
 		)
 		if project != nil {
+			m.logger.Debugf("Got project query %s", project.StringDetailed())
 			q, err := m.Cx1Client.GetAuditSASTQueryByKey(m.session, project.EditorKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get project query source: %v", err)

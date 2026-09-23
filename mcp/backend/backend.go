@@ -331,7 +331,6 @@ func (m *MCPBackend) CheckControlProjects() (string, int) {
 	for _, cp := range m.ControlProjects {
 		state := ""
 		findingStatus, err := m.checkControlFindingStatus(cp.ScanID)
-		m.logger.Debugf("Finding %s-%d: %t, %v", cp.Label, cp.Index, findingStatus, err)
 		if err != nil {
 			state = "Error: " + err.Error()
 			fails++
