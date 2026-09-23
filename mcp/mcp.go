@@ -165,6 +165,13 @@ func (m *MCP) registerTools() {
 		return textResult(m.SaveQuery(input.Level, input.Language, input.Group, input.Name, input.Code)), nil, nil
 	})
 
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "restore_query",
+		Description: "Restores a query override to the version it had before the first save_query call touched it in this session, undoing any saved edits at that hierarchy level.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input queryInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.RestoreQuery(input.Level, input.Language, input.Group, input.Name)), nil, nil
+	})
+
 	type searchInput struct {
 		Substring string `json:"substring" jsonschema:"Text to search for within the scanned source code"`
 	}
@@ -193,6 +200,10 @@ func (m *MCP) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	return m.server.Run(ctx, &mcpsdk.StdioTransport{})
+}
+
+func (m *MCP) SetGUID(guid string) {
+	m.backend.Target.TestAppGUID = guid
 }
 
 func (m *MCP) Shutdown() {

@@ -290,36 +290,38 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 		result.WriteString(m.FormatQuery(product, edit[0]))
 	}
 
-	if view[1] {
-		result.WriteString("\n[TENANT-LEVEL QUERY INFO]\n")
-		if tenant != nil {
-			result.WriteString(m.FormatQuery(tenant, edit[1]))
-		} else if edit[1] {
-			result.WriteString("Doens't exist, can be created\n")
-		} else {
-			result.WriteString("Does not exist, cannot create (out of scope)\n")
+	if product.Language != "Common" { // can't override common-language
+		if view[1] {
+			result.WriteString("\n[TENANT-LEVEL QUERY INFO]\n")
+			if tenant != nil {
+				result.WriteString(m.FormatQuery(tenant, edit[1]))
+			} else if edit[1] {
+				result.WriteString("Doens't exist, can be created\n")
+			} else {
+				result.WriteString("Does not exist, cannot create (out of scope)\n")
+			}
 		}
-	}
 
-	if m.Target.Application != nil && view[2] {
-		result.WriteString("\n[APPLICATION-LEVEL QUERY INFO]\n")
-		if app != nil {
-			result.WriteString(m.FormatQuery(app, edit[2]))
-		} else if edit[2] {
-			result.WriteString("Doens't exist, can be created\n")
-		} else {
-			result.WriteString("Does not exist, cannot create (out of scope)\n")
+		if m.Target.Application != nil && view[2] {
+			result.WriteString("\n[APPLICATION-LEVEL QUERY INFO]\n")
+			if app != nil {
+				result.WriteString(m.FormatQuery(app, edit[2]))
+			} else if edit[2] {
+				result.WriteString("Doens't exist, can be created\n")
+			} else {
+				result.WriteString("Does not exist, cannot create (out of scope)\n")
+			}
 		}
-	}
 
-	if view[3] {
-		result.WriteString("\n[PROJECT-LEVEL QUERY INFO]\n")
-		if proj != nil {
-			result.WriteString(m.FormatQuery(proj, edit[3]))
-		} else if edit[3] {
-			result.WriteString("Doens't exist, can be created\n")
-		} else {
-			result.WriteString("Does not exist, cannot create (out of scope)\n")
+		if view[3] {
+			result.WriteString("\n[PROJECT-LEVEL QUERY INFO]\n")
+			if proj != nil {
+				result.WriteString(m.FormatQuery(proj, edit[3]))
+			} else if edit[3] {
+				result.WriteString("Doens't exist, can be created\n")
+			} else {
+				result.WriteString("Does not exist, cannot create (out of scope)\n")
+			}
 		}
 	}
 
@@ -404,8 +406,8 @@ func (m *MCPBackend) configureCustomPreset() (Cx1ClientGo.Preset, error) {
 // createProject creates one project inside the given application and assigns
 // it the given preset. The preset assignment persists for future scans of the
 // same project, so it only needs to be set once here.
-func (m *MCPBackend) createProject(applicationID, projectName, presetName string) (Cx1ClientGo.Project, error) {
-	project, err := m.Cx1Client.CreateProjectInApplication(projectName, []string{}, map[string]string{}, applicationID)
+func (m *MCPBackend) createProject(applicationName, projectName, presetName string) (Cx1ClientGo.Project, error) {
+	project, _, err := m.Cx1Client.GetOrCreateProjectInApplicationByName(projectName, applicationName)
 	if err != nil {
 		return project, fmt.Errorf("failed to create project: %v", err)
 	}

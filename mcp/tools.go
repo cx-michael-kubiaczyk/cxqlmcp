@@ -98,19 +98,15 @@ func (m *MCP) ShowSourceCode(path string, lineStart, lineEnd int) string {
 
 // returns the CxQL hierarchy + source code for a given query, eg: Missing_HSTS_Header
 func (m *MCP) GetQueryInfo(language, group, name string) string {
-	queries, err := m.backend.GetQueryHierarchy(language, group, name)
-	if err != nil {
-		return fmt.Sprintf("Error: Failed to get query hierarchy for %s.%s.%s: %s", language, group, name, err)
-	}
-
-	return m.backend.FormatQueryHierarchy(queries, []bool{true, true, true, true}, []bool{true, true, true, true})
+	return m.GetQueryInfoFiltered(language, group, name, []bool{true, true, true, true}, []bool{true, true, true, true})
 }
 
 // returns the CxQL hierarchy + source code for a given query, eg: Missing_HSTS_Header
 func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bool) string {
+
 	queries, err := m.backend.GetQueryHierarchy(language, group, name)
 	if err != nil {
-		return fmt.Sprintf("Error: Failed to get query hierarchy for %s.%s.%s: %s", language, group, name, err)
+		return fmt.Sprintf("Error: Failed to get query info for %s.%s.%s: %s", language, group, name, err)
 	}
 
 	return m.backend.FormatQueryHierarchy(queries, view, edit)
@@ -119,6 +115,7 @@ func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bo
 // returns only the source code for a query at a specific hierarchy level, eg: Missing_HSTS_Header at the Project level
 func (m *MCP) GetQueryCode(level, language, group, query string) string {
 	level, levelID := m.getLevels(level)
+	language = m.backend.QueryLanguageCheck(language, group, query)
 
 	targetQuery := m.backend.Queries.GetQueryByLevelAndName(level, levelID, language, group, query)
 	if targetQuery == nil {
@@ -163,13 +160,13 @@ func (m *MCP) ScanControlProjects() string {
 	if err := m.backend.ScanControlProjects(); err != nil {
 		return fmt.Sprintf("Error: Failed to scan control projects: %v", err)
 	}
-	return m.CheckControlProjects()
+	return ""
 }
 
 // runs an existing query and returns the results (which may be multiple dataflow paths)
 func (m *MCP) RunQuery(level, language, group, query string) string {
 	level, levelID := m.getLevels(level)
-
+	language = m.backend.QueryLanguageCheck(language, group, query)
 	executedQuery := m.backend.Queries.GetQueryByLevelAndName(level, levelID, language, group, query)
 	if executedQuery == nil {
 		return fmt.Sprintf("Error: The %s-level query %s.%s.%s does not exist", level, language, group, query)
@@ -190,6 +187,12 @@ func (m *MCP) RunQuery(level, language, group, query string) string {
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
 func (m *MCP) TestQuery(level, language, group, query, code string) string {
+	level, _ = m.getLevels(level)
+	language = m.backend.QueryLanguageCheck(language, group, query)
+	if language == "Common" {
+		return fmt.Sprintf("Error: Cannot change Common-language query %s.%s", group, query)
+	}
+
 	executedQuery, err := m.getTargetQuery(level, language, group, query, code)
 	if err != nil {
 		return fmt.Sprintf("Error: %s", err)
@@ -205,6 +208,11 @@ func (m *MCP) TestQuery(level, language, group, query, code string) string {
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
 func (m *MCP) SaveQuery(level, language, group, query, code string) string {
+	level, _ = m.getLevels(level)
+	language = m.backend.QueryLanguageCheck(language, group, query)
+	if language == "Common" {
+		return fmt.Sprintf("Error: Cannot change Common-language query %s.%s", group, query)
+	}
 	executedQuery, err := m.getTargetQuery(level, language, group, query, code)
 	if err != nil {
 		return fmt.Sprintf("Error: %s", err)
@@ -220,7 +228,39 @@ func (m *MCP) SaveQuery(level, language, group, query, code string) string {
 			return m.backend.ProcessRunFailures(executedQuery, &results, code)
 		}
 	}
+	if resp := m.ScanControlProjects(); resp != "" {
+		return fmt.Sprintf("Error: failed to scan control projects after query update. %s", resp)
+	}
 	return fmt.Sprintf("Query %s.%s.%s saved.", language, group, query)
+}
+
+// reverts a query override to the version it had before the first save_query call
+// touched it in this session. Errors if the query was never saved.
+func (m *MCP) RestoreQuery(level, language, group, query string) string {
+	levelStr, levelID := m.getLevels(level)
+	language = m.backend.QueryLanguageCheck(language, group, query)
+	if language == "Common" {
+		return fmt.Sprintf("Error: Cannot change Common-language query %s.%s", group, query)
+	}
+
+	executedQuery := m.backend.Queries.GetQueryByLevelAndName(levelStr, levelID, language, group, query)
+	if executedQuery == nil {
+		return fmt.Sprintf("Error: The %s-level query %s.%s.%s does not exist", level, language, group, query)
+	}
+
+	results, original, err := m.backend.RestoreQuery(executedQuery)
+	if err != nil {
+		return fmt.Sprintf("Error: %s", err)
+	}
+
+	if len(results.FailedQueries) > 0 {
+		return m.backend.ProcessRunFailures(executedQuery, &results, original)
+	}
+
+	if resp := m.ScanControlProjects(); resp != "" {
+		return fmt.Sprintf("Error: failed to scan control projects after query restore. %s", resp)
+	}
+	return fmt.Sprintf("Query %s.%s.%s restored to its original version.", language, group, query)
 }
 
 func (m *MCP) GetCurrentApplicationID() string {

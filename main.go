@@ -264,7 +264,7 @@ result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 }
 
 func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
-	// todo: pass real TP/TN finding URLs to exercise CreateTestEnvironment
+	server.SetGUID("123test")
 	testPrint(logger, "CreateSessionFromURL",
 		server.CreateSessionFromURL("https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName",
 			[]string{"https://deu.ast.checkmarx.net/sast-results/2a03108b-96dc-496a-b451-c80aac2aa1db/8e62d430-7587-4637-b99c-5d4be8ba090b?resultId=b5%2F3vdqME0D%2FfIke2QS8GEI%2FrB0%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName"},
@@ -277,6 +277,13 @@ func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	testPrint(logger, "Query info",
 		server.GetQueryInfo("JavaScript", "JavaScript_Medium_Threat", "Missing_HSTS_Header"),
 	)
+
+	testPrint(logger, "Query info",
+		server.GetQueryInfo("JavaScript", "Common_Medium_Threat", "Missing_HSTS_Header"),
+	)
+
+	return
+
 	testPrint(logger, "Run sub-query Find_HSTS_Sanitize",
 		server.RunQuery(mcp.QUERY_LEVEL_PRODUCT, "JavaScript", "General", "Find_HSTS_Sanitize"),
 	)
@@ -295,7 +302,7 @@ func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 	)
 
 	testPrint(logger, "Test saved query",
-		server.ScanControlProjects(),
+		server.CheckControlProjects(),
 	)
 
 }

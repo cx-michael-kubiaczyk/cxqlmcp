@@ -28,6 +28,11 @@ type MCPBackend struct {
 	ScanSources  CodeSet
 	Queries      Cx1ClientGo.SASTQueryCollection
 	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
+
+	// originalSources holds, per query EditorKey, the source a query had before
+	// the first SaveQuery call in this session touched it, so RestoreQuery can
+	// revert an override back to that pre-edit state.
+	originalSources map[string]string
 }
 
 // ControlProject represents a TP/TN reference project cloned into the test
@@ -45,9 +50,10 @@ type ControlProject struct {
 
 func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBackend {
 	return MCPBackend{Cx1Client: cx1client,
-		logger:       logger,
-		ScanSources:  NewCodeSet(),
-		descriptions: make(map[uint64]Cx1ClientGo.SASTQueryDescription),
+		logger:          logger,
+		ScanSources:     NewCodeSet(),
+		descriptions:    make(map[uint64]Cx1ClientGo.SASTQueryDescription),
+		originalSources: make(map[string]string),
 	}
 }
 
@@ -115,13 +121,17 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 		return fmt.Errorf("no target project/scan loaded")
 	}
 
-	guid, err := newShortID(10)
-	if err != nil {
-		return fmt.Errorf("failed to generate test id: %v", err)
+	guid := m.Target.TestAppGUID
+	if guid == "" {
+		var err error
+		guid, err = newShortID(10)
+		if err != nil {
+			return fmt.Errorf("failed to generate test id: %v", err)
+		}
+		m.Target.TestAppGUID = guid
 	}
-	m.Target.TestAppGUID = guid
 
-	app, err := m.Cx1Client.CreateApplication("CxQL-" + guid)
+	app, err := m.Cx1Client.GetOrCreateApplicationByName("CxQL-" + guid)
 	if err != nil {
 		return fmt.Errorf("failed to create test application: %v", err)
 	}
@@ -184,7 +194,7 @@ func (m *MCPBackend) CreateTestEnvironment(result *Cx1ClientGo.ScanSASTResult, s
 			scans[i] = specResult{spec: spec, err: fmt.Errorf("failed to fetch source: %v", err)}
 			continue
 		}
-		project, err := m.createProject(app.ApplicationID, spec.projectName, "CxQL-"+m.Target.TestAppGUID)
+		project, err := m.createProject(app.Name, spec.projectName, "CxQL-"+m.Target.TestAppGUID)
 		if err != nil {
 			scans[i] = specResult{spec: spec, err: err}
 			continue
@@ -450,9 +460,30 @@ func (m *MCPBackend) SaveQuery(query *Cx1ClientGo.SASTQuery, source string) (Cx1
 		return Cx1ClientGo.QueryRun{}, fmt.Errorf("failed to refresh audit session: %v", err)
 	}
 
+	if _, ok := m.originalSources[query.EditorKey]; !ok {
+		m.originalSources[query.EditorKey] = query.Source
+	}
+
 	_, run, err := m.Cx1Client.UpdateSASTQuerySource(m.session, *query, source)
 
 	return Cx1ClientGo.QueryRun{FailedQueries: run}, err
+}
+
+// RestoreQuery reverts query's override back to the source it had before the
+// first SaveQuery call touched it in this session. Returns an error if no such
+// baseline was ever recorded (i.e. this query was never saved).
+func (m *MCPBackend) RestoreQuery(query *Cx1ClientGo.SASTQuery) (Cx1ClientGo.QueryRun, string, error) {
+	if query == nil {
+		return Cx1ClientGo.QueryRun{}, "", fmt.Errorf("nil query provided")
+	}
+
+	original, ok := m.originalSources[query.EditorKey]
+	if !ok {
+		return Cx1ClientGo.QueryRun{}, "", fmt.Errorf("no original version recorded for query %s.%s.%s at this level; it was never saved in this session", query.Language, query.Group, query.Name)
+	}
+
+	run, err := m.SaveQuery(query, original)
+	return run, original, err
 }
 
 func (m *MCPBackend) GetQueryDescription(queryId uint64) (Cx1ClientGo.SASTQueryDescription, error) {
@@ -649,4 +680,15 @@ func (m *MCPBackend) ProcessRunFailures(executedQuery *Cx1ClientGo.SASTQuery, re
 	}
 
 	return response.String()
+}
+
+func (m *MCPBackend) QueryLanguageCheck(language, group, query string) string {
+	q := m.Queries.GetQueryByName(language, group, query)
+	if q == nil {
+		q = m.Queries.GetQueryByName("Common", group, query)
+		if q != nil {
+			return "Common"
+		}
+	}
+	return language
 }
