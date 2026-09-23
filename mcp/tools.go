@@ -46,7 +46,7 @@ func (m *MCP) CreateSessionFromURL(targetFinding string, tpFindings, tnFindings 
 		return fmt.Sprintf("Error: The session was created, but the scan in web-audit did not find this finding: %s\n%s", m.backend.Target.Result.String(), summary)
 	}
 
-	return fmt.Sprintf("The session was created successfully and the finding is present.\n\n%s", summary)
+	return "The session was created successfully and the finding is present."
 }
 
 // returns the current state:
