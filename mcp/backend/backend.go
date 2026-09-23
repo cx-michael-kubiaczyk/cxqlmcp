@@ -497,9 +497,9 @@ func (m *MCPBackend) UpdateQueryByKey(editorKey string) (*Cx1ClientGo.SASTQuery,
 	return m.Queries.GetQueryByEditorKey(editorKey), nil
 }
 
-func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.SASTQuery, error) {
+func (m *MCPBackend) CreateOverride(level, levelID string, query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.SASTQuery, error) {
 	m.sessionRefresh()
-	_, err := m.Cx1Client.CreateSASTQueryOverride(m.session, m.Cx1Client.QueryTypeProject(), query)
+	_, err := m.Cx1Client.CreateSASTQueryOverride(m.session, level, query)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +509,22 @@ func (m *MCPBackend) CreateOverride(query *Cx1ClientGo.SASTQuery) (*Cx1ClientGo.
 		return nil, err
 	}
 
-	return m.Queries.GetQueryByLevelAndID(m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID, query.QueryID), nil
+	return m.Queries.GetQueryByLevelAndID(level, levelID, query.QueryID), nil
+}
+
+func (m *MCPBackend) CreateNewQuery(query Cx1ClientGo.SASTQuery) (*Cx1ClientGo.SASTQuery, error) {
+	m.sessionRefresh()
+	q, _, err := m.Cx1Client.CreateNewSASTQuery(m.session, query)
+	if err != nil {
+		return nil, err
+	}
+
+	err = m.UpdateQueryCollection()
+	if err != nil {
+		return nil, err
+	}
+
+	return m.Queries.GetQueryByLevelAndID(q.Level, q.LevelID, query.QueryID), nil
 }
 
 func (m *MCPBackend) UpdateQueryCollection() error {
@@ -520,7 +535,7 @@ func (m *MCPBackend) UpdateQueryCollection() error {
 	}
 	m.Queries.AddCollection(&qc)
 
-	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject(), m.Target.Project.ProjectID)
+	aq, err := m.Cx1Client.GetAuditSASTQueriesByLevelID(m.session, m.Cx1Client.QueryTypeProject())
 	if err != nil {
 		return fmt.Errorf("failed to get audit queries: %v", err)
 	}

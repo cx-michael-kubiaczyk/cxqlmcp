@@ -2,6 +2,15 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/cxpsemea/Cx1ClientGo"
+)
+
+const (
+	QUERY_LEVEL_PROJECT     = "Project"
+	QUERY_LEVEL_APPLICATION = "Application"
+	QUERY_LEVEL_TENANT      = "Tenant"
+	QUERY_LEVEL_PRODUCT     = "Product"
 )
 
 // given a full path to a finding, eg: https://deu.ast.checkmarx.net/sast-results/9ee3602f-94c6-4230-8be4-bdb6d9fdeb03/8130f76b-c6dc-487e-a2a4-54be9f6a5945?resultId=Z6ZsAZogrxT9WY99pVuEDiLbbFA%3D&pagination=pageSize%3D10%3BcurrentPage%3D1&grouping=groups%255B0%255D%3Dlanguage%3Bgroups%255B1%255D%3Dseverity%3Bgroups%255B2%255D%3DqueryName
@@ -125,7 +134,7 @@ func (m *MCP) CheckOriginalFinding() string {
 func (m *MCP) CheckControlProjects() string {
 	summary, fails := m.backend.CheckControlProjects()
 	if fails > 0 {
-		return fmt.Sprintf("%d control projects failed validation.\n%s", fails, summary)
+		return fmt.Sprintf("Regression: %d control projects failed validation.\n%s", fails, summary)
 	}
 	return fmt.Sprintf("All control projects passed validation.\n%s", summary)
 }
@@ -141,10 +150,12 @@ func (m *MCP) ScanControlProjects() string {
 }
 
 // runs an existing query and returns the results (which may be multiple dataflow paths)
-func (m *MCP) RunQuery(language, group, query string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
+func (m *MCP) RunQuery(level, language, group, query string) string {
+	level, levelID := m.getLevels(level)
+
+	executedQuery := m.backend.Queries.GetQueryByLevelAndName(level, levelID, language, group, query)
 	if executedQuery == nil {
-		return "Error: The query %s.%s.%s does not exist"
+		return fmt.Sprintf("Error: The %s-level query %s.%s.%s does not exist", level, language, group, query)
 	}
 
 	_, err := m.backend.GetQuerySource(executedQuery)
@@ -161,17 +172,10 @@ func (m *MCP) RunQuery(language, group, query string) string {
 }
 
 // runs an updated version of a CxQL query, without saving the changes, and returns the results (which may be multiple dataflow paths)
-func (m *MCP) TestQuery(language, group, query, code string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
-	if executedQuery == nil {
-		return "Error: The query %s.%s.%s does not exist"
-	}
-	if executedQuery.Level != m.backend.Cx1Client.QueryTypeProject() {
-		q, err := m.backend.CreateOverride(executedQuery)
-		if err != nil {
-			return fmt.Sprintf("Error: Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
-		}
-		executedQuery = q
+func (m *MCP) TestQuery(level, language, group, query, code string) string {
+	executedQuery, err := m.getTargetQuery(level, language, group, query, code)
+	if err != nil {
+		return fmt.Sprintf("Error: %s", err)
 	}
 
 	results, err := m.backend.RunQuery(executedQuery, code)
@@ -183,26 +187,21 @@ func (m *MCP) TestQuery(language, group, query, code string) string {
 }
 
 // saves an updated version of a CxQL query based on the last successful RunQuery call.
-func (m *MCP) SaveQuery(language, group, query, code string) string {
-	executedQuery := m.backend.Queries.GetClosestQueryByLevelAndName(m.backend.Cx1Client.QueryTypeProject(), m.backend.Target.Result.ProjectID, language, group, query)
-	if executedQuery == nil {
-		return "Error: The query %s.%s.%s does not exist"
-	}
-	if executedQuery.Level != m.backend.Cx1Client.QueryTypeProject() {
-		q, err := m.backend.CreateOverride(executedQuery)
-		if err != nil {
-			return fmt.Sprintf("Error: Failed to create Project-level query override for query %s.%s.%s: %s", language, group, query, err)
-		}
-		executedQuery = q
-	}
-
-	results, err := m.backend.SaveQuery(executedQuery, code)
+func (m *MCP) SaveQuery(level, language, group, query, code string) string {
+	executedQuery, err := m.getTargetQuery(level, language, group, query, code)
 	if err != nil {
-		return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
+		return fmt.Sprintf("Error: %s", err)
 	}
 
-	if len(results.FailedQueries) > 0 {
-		return m.backend.ProcessRunFailures(executedQuery, &results, code)
+	if code != executedQuery.Source {
+		results, err := m.backend.SaveQuery(executedQuery, code)
+		if err != nil {
+			return fmt.Sprintf("Error: Failed to run the query in the audit session: %s", err)
+		}
+
+		if len(results.FailedQueries) > 0 {
+			return m.backend.ProcessRunFailures(executedQuery, &results, code)
+		}
 	}
 	return fmt.Sprintf("Query %s.%s.%s saved.", language, group, query)
 }
@@ -213,4 +212,58 @@ func (m *MCP) GetCurrentApplicationID() string {
 
 func (m *MCP) GetCurrentProjectID() string {
 	return m.backend.GetCurrentProjectID()
+}
+
+func (m *MCP) getLevels(level string) (string, string) {
+	switch level {
+	case QUERY_LEVEL_APPLICATION:
+		return m.backend.Cx1Client.QueryTypeApplication(), m.backend.GetCurrentApplicationID()
+	case QUERY_LEVEL_TENANT:
+		return m.backend.Cx1Client.QueryTypeTenant(), m.backend.Cx1Client.QueryTypeTenant()
+	case QUERY_LEVEL_PRODUCT:
+		return m.backend.Cx1Client.QueryTypeProduct(), m.backend.Cx1Client.QueryTypeProduct()
+	default:
+		return m.backend.Cx1Client.QueryTypeProject(), m.backend.GetCurrentProjectID()
+	}
+}
+
+func (m *MCP) getTargetQuery(level, language, group, query, code string) (*Cx1ClientGo.SASTQuery, error) {
+	levelStr, levelID := m.getLevels(level)
+	executedQuery := m.backend.Queries.GetQueryByLevelAndName(levelStr, levelID, language, group, query)
+	if executedQuery == nil {
+		baseQuery := m.backend.Queries.GetClosestQueryByLevelAndName(levelStr, levelID, language, group, query)
+		if baseQuery == nil {
+			// create query
+			b := false
+			src := "result = All.NewCxList();"
+			if level == QUERY_LEVEL_TENANT {
+				src = code
+			}
+			q, err := m.backend.CreateNewQuery(Cx1ClientGo.SASTQuery{
+				Source:             src,
+				Language:           language,
+				Group:              group,
+				Name:               query,
+				Severity:           "Info",
+				CweID:              0,
+				IsExecutable:       &b,
+				QueryDescriptionId: 0,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create new tenant-level query %s.%s.%s: %s", language, group, query, err)
+			}
+			baseQuery = q
+		}
+
+		if level == QUERY_LEVEL_TENANT {
+			executedQuery = baseQuery
+		} else {
+			q, err := m.backend.CreateOverride(levelStr, levelID, baseQuery)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create %s-level query override for query %s.%s.%s: %s", levelStr, language, group, query, err)
+			}
+			executedQuery = q
+		}
+	}
+	return executedQuery, nil
 }

@@ -97,6 +97,7 @@ func (m *MCP) registerTools() {
 	})
 
 	type queryInput struct {
+		Level    string `json:"level" jsonschema:"CxQL query level, e.g. Product, Tenant, Application, or Project"`
 		Language string `json:"language" jsonschema:"CxQL language name, e.g. Java or JavaScript"`
 		Group    string `json:"group" jsonschema:"CxQL query group name, e.g. Java_High_Risk"`
 		Name     string `json:"name" jsonschema:"CxQL query name, e.g. Reflected_XSS"`
@@ -133,10 +134,11 @@ func (m *MCP) registerTools() {
 		Name:        "run_query",
 		Description: "Runs an existing CxQL query at its current saved state and returns results with annotated source code.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input queryInput) (*mcpsdk.CallToolResult, any, error) {
-		return textResult(m.RunQuery(input.Language, input.Group, input.Name)), nil, nil
+		return textResult(m.RunQuery(input.Level, input.Language, input.Group, input.Name)), nil, nil
 	})
 
 	type testQueryInput struct {
+		Level    string `json:"level" jsonschema:"CxQL query level, e.g. Product, Tenant, Application, or Project"`
 		Language string `json:"language" jsonschema:"CxQL language name, e.g. Java or JavaScript"`
 		Group    string `json:"group" jsonschema:"CxQL query group name"`
 		Name     string `json:"name" jsonschema:"CxQL query name"`
@@ -146,14 +148,14 @@ func (m *MCP) registerTools() {
 		Name:        "test_query",
 		Description: "Runs a modified version of a CxQL query without saving, creating a temporary project-level override if needed. Use this to iterate on query changes before saving.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input testQueryInput) (*mcpsdk.CallToolResult, any, error) {
-		return textResult(m.TestQuery(input.Language, input.Group, input.Name, input.Code)), nil, nil
+		return textResult(m.TestQuery(input.Level, input.Language, input.Group, input.Name, input.Code)), nil, nil
 	})
 
 	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
 		Name:        "save_query",
 		Description: "Saves the CxQL query modification as a permanent override at the appropriate hierarchy level.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input testQueryInput) (*mcpsdk.CallToolResult, any, error) {
-		return textResult(m.SaveQuery(input.Language, input.Group, input.Name, input.Code)), nil, nil
+		return textResult(m.SaveQuery(input.Level, input.Language, input.Group, input.Name, input.Code)), nil, nil
 	})
 
 	type searchInput struct {

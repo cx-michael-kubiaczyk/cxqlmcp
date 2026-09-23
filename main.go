@@ -245,17 +245,17 @@ func testXSS(server *mcp.MCP, logger *logrus.Logger) {
 		)
 	*/
 	logger.Infof("Run sub-query Find_Full_XSS_Sanitize:\n%s\n%s",
-		server.RunQuery("Java", "General", "Find_Full_XSS_Sanitize"),
+		server.RunQuery(mcp.QUERY_LEVEL_PRODUCT, "Java", "General", "Find_Full_XSS_Sanitize"),
 		breaker,
 	)
 	logger.Infof("Test error in custom Find_Full_XSS_Sanitize:\n%s\n%s",
-		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_();
+		server.TestQuery(mcp.QUERY_LEVEL_APPLICATION, "Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_();
 result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 `),
 		breaker,
 	)
 	logger.Infof("Test custom Find_Full_XSS_Sanitize:\n%s\n%s",
-		server.TestQuery("Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_Full_XSS_Sanitize();
+		server.TestQuery(mcp.QUERY_LEVEL_APPLICATION, "Java", "General", "Find_Full_XSS_Sanitize", `result = base.Find_Full_XSS_Sanitize();
 result.Add(Find_Methods().FindByMemberAccess("sanitizers.sanitizeEmail"));
 `),
 		breaker,
@@ -277,12 +277,20 @@ func testHSTS(server *mcp.MCP, logger *logrus.Logger) {
 		server.GetQueryInfo("JavaScript", "JavaScript_Medium_Threat", "Missing_HSTS_Header"),
 	)
 	testPrint(logger, "Run sub-query Find_HSTS_Sanitize",
-		server.RunQuery("JavaScript", "General", "Find_HSTS_Sanitize"),
+		server.RunQuery(mcp.QUERY_LEVEL_PRODUCT, "JavaScript", "General", "Find_HSTS_Sanitize"),
 	)
 	logger.Infof("%s:\n%s\n", "Test error in custom Find_HSTS_Sanitize",
-		server.TestQuery("JavaScript", "General", "Find_HSTS_Sanitize", "result = base.Find_();"),
+		server.TestQuery(mcp.QUERY_LEVEL_APPLICATION, "JavaScript", "General", "Find_HSTS_Sanitize", "result = base.Find_();"),
 	)
 	testPrint(logger, "Test scratch query",
-		server.TestQuery("JavaScript", "CxDefaultQueryGroup", "CxDefaultQuery", "result = Find_Strings();"),
+		server.TestQuery(mcp.QUERY_LEVEL_APPLICATION, "JavaScript", "CxDefaultQueryGroup", "CxDefaultQuery", "result = Find_Strings();"),
+	)
+
+	testPrint(logger, "Save no-result override of Find_HSTS_Sanitize",
+		server.SaveQuery(mcp.QUERY_LEVEL_APPLICATION, "JavaScript", "General", "Find_HSTS_Sanitize", "result = All.NewCxList();"),
+	)
+
+	testPrint(logger, "Test saved query",
+		server.ScanControlProjects(),
 	)
 }

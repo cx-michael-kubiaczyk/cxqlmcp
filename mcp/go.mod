@@ -3,7 +3,7 @@ module github.com/cxpsemea/cxqlmcp/mcp
 go 1.26.3
 
 require (
-	github.com/cxpsemea/Cx1ClientGo v0.1.60
+	github.com/cxpsemea/Cx1ClientGo v0.1.67
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/sirupsen/logrus v1.9.4
 )
