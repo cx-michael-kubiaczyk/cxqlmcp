@@ -19,3 +19,5 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
+
+replace 	github.com/cxpsemea/Cx1ClientGo v0.1.67 => c:/work/code/cx1clientgo

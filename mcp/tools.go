@@ -83,7 +83,20 @@ func (m *MCP) GetCodeSnippets() string {
 
 // returns a list of files + lines matching the search string, eg /src/somefile.java:123 this is the line of code
 func (m *MCP) SearchCode(substring string) string {
-	return ""
+	if strings.TrimSpace(substring) == "" {
+		return "Error: substring must not be empty"
+	}
+
+	matches := m.backend.ScanSources.Search(substring)
+	if len(matches) == 0 {
+		return fmt.Sprintf("No matches found for %q in the scanned source code.", substring)
+	}
+
+	var sb strings.Builder
+	for _, match := range matches {
+		fmt.Fprintf(&sb, "%s:%d: %s\n", match.Path, match.Line, strings.TrimSpace(match.Text))
+	}
+	return sb.String()
 }
 
 // searches the embedded CxQL API reference by keyword and returns the top matches
@@ -102,8 +115,26 @@ func (m *MCP) GetHLD() string {
 
 // returns the source code along with any comments added by the MCP process (dataflow markers)
 func (m *MCP) ShowSourceCode(path string, lineStart, lineEnd int) string {
+	fs, ok := m.backend.ScanSources.GetFile(path)
+	if !ok {
+		paths := m.backend.ScanSources.FilePaths()
+		if len(paths) == 0 {
+			return "Error: no source files are loaded in this session"
+		}
+		return fmt.Sprintf("Error: file %q was not found in the scanned source. Known files:\n%s", path, strings.Join(paths, "\n"))
+	}
 
-	return ""
+	if lineStart < 1 {
+		lineStart = 1
+	}
+	if lineEnd < lineStart {
+		return fmt.Sprintf("Error: line_end (%d) must be >= line_start (%d)", lineEnd, lineStart)
+	}
+	if lineStart > fs.LineCount() {
+		return fmt.Sprintf("Error: file %q has %d lines; line_start %d is out of range", path, fs.LineCount(), lineStart)
+	}
+
+	return fmt.Sprintf("```\n%s```\n", fs.CodeRange(lineStart, lineEnd))
 }
 
 // returns the CxQL hierarchy + source code for a given query, eg: Missing_HSTS_Header

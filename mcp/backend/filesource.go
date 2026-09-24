@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -57,6 +58,46 @@ func (cs *CodeSet) HasFile(path string) bool {
 	return ok
 }
 
+func (cs *CodeSet) GetFile(path string) (*FileSource, bool) {
+	fs, ok := cs.Files[path]
+	return fs, ok
+}
+
+// FilePaths returns the paths of all loaded source files, sorted alphabetically.
+func (cs *CodeSet) FilePaths() []string {
+	paths := make([]string, 0, len(cs.Files))
+	for path := range cs.Files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+type CodeSearchMatch struct {
+	Path string
+	Line int // 1-indexed
+	Text string
+}
+
+// Search looks for substring (case-insensitive) across every loaded source
+// file and returns each matching line, sorted by file path then line number.
+func (cs *CodeSet) Search(substring string) []CodeSearchMatch {
+	var matches []CodeSearchMatch
+	if substring == "" {
+		return matches
+	}
+	needle := strings.ToLower(substring)
+	for _, path := range cs.FilePaths() {
+		fs := cs.Files[path]
+		for i, line := range fs.code {
+			if strings.Contains(strings.ToLower(line), needle) {
+				matches = append(matches, CodeSearchMatch{Path: path, Line: i + 1, Text: line})
+			}
+		}
+	}
+	return matches
+}
+
 func NewFileSource(code string) FileSource {
 	return FileSource{
 		code:    strings.Split(strings.ReplaceAll(code, "\r\n", "\n"), "\n"),
@@ -87,17 +128,49 @@ func (f *FileSource) Code() string {
 	var str strings.Builder
 	for i, line := range f.code {
 		str.WriteString(line)
-		if augs, ok := f.Augs[uint64(i)]; ok {
-			str.WriteString(" // ")
-			comments := make([]string, len(augs))
-			a := 0
-			for aug := range augs {
-				comments[a] = fmt.Sprintf("%s: %s", aug, strings.Join(augs[aug], ", "))
-				a++
-			}
-			str.WriteString(strings.Join(comments, "; "))
-		}
+		str.WriteString(f.augComment(i))
 		str.WriteString("\n")
 	}
 	return str.String()
+}
+
+// LineCount returns the number of lines in the file.
+func (f *FileSource) LineCount() int {
+	return len(f.code)
+}
+
+// CodeRange renders lines lineStart..lineEnd (1-indexed, inclusive), each
+// prefixed with its line number, with the same inline dataflow annotations
+// used by Code(). The range is clamped to the file's bounds.
+func (f *FileSource) CodeRange(lineStart, lineEnd int) string {
+	if lineStart < 1 {
+		lineStart = 1
+	}
+	if lineEnd > len(f.code) {
+		lineEnd = len(f.code)
+	}
+
+	var str strings.Builder
+	for i := lineStart - 1; i < lineEnd; i++ {
+		fmt.Fprintf(&str, "%d: %s", i+1, f.code[i])
+		str.WriteString(f.augComment(i))
+		str.WriteString("\n")
+	}
+	return str.String()
+}
+
+// augComment renders the " // Source: message; ..." suffix for line index i
+// (0-indexed), or "" if the line has no annotations.
+func (f *FileSource) augComment(i int) string {
+	augs, ok := f.Augs[uint64(i)]
+	if !ok {
+		return ""
+	}
+	comments := make([]string, len(augs))
+	a := 0
+	for aug := range augs {
+		comments[a] = fmt.Sprintf("%s: %s", aug, strings.Join(augs[aug], ", "))
+		a++
+	}
+	return " // " + strings.Join(comments, "; ")
 }
