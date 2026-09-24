@@ -85,6 +85,15 @@ func (m *MCP) SearchCode(substring string) string {
 	return ""
 }
 
+// searches the embedded CxQL API reference by keyword and returns the top matches
+func (m *MCP) SearchCxQLDocs(query string) string {
+	docs := m.backend.SearchCxQLDocs(query, 5)
+	if len(docs) == 0 {
+		return "No matching CxQL documentation found."
+	}
+	return m.backend.FormatCxQLDocResults(docs)
+}
+
 // return the high-level description of the process
 func (m *MCP) GetHLD() string {
 	return m.HLD

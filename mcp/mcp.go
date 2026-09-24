@@ -182,6 +182,16 @@ func (m *MCP) registerTools() {
 		return textResult(m.SearchCode(input.Substring)), nil, nil
 	})
 
+	type docSearchInput struct {
+		Query string `json:"query" jsonschema:"Keywords to search for in the CxQL API reference (e.g. a CxList method name like InfluencingOn or FindXSS, or a concept like sanitizer or dataflow)"`
+	}
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "search_cxql_docs",
+		Description: "Searches the CxQL API reference documentation (CxList method syntax, parameters, exceptions, and examples) by keyword. Use this to confirm the exact signature or behavior of a CxQL method before writing or modifying query code.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input docSearchInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.SearchCxQLDocs(input.Query)), nil, nil
+	})
+
 	type showCodeInput struct {
 		Path      string `json:"path" jsonschema:"File path within the scanned project"`
 		LineStart int    `json:"line_start" jsonschema:"First line to show (1-indexed)"`
