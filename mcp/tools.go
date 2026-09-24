@@ -103,6 +103,7 @@ func (m *MCP) GetQueryInfo(language, group, name string) string {
 
 // returns the CxQL hierarchy + source code for a given query, eg: Missing_HSTS_Header
 func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bool) string {
+	language = m.backend.QueryLanguageCheck(language, group, name)
 
 	queries, err := m.backend.GetQueryHierarchy(language, group, name)
 	if err != nil {

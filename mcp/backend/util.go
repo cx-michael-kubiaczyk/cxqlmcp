@@ -296,7 +296,7 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 			if tenant != nil {
 				result.WriteString(m.FormatQuery(tenant, edit[1]))
 			} else if edit[1] {
-				result.WriteString("Doens't exist, can be created\n")
+				result.WriteString("Doesn't exist, can be created\n")
 			} else {
 				result.WriteString("Does not exist, cannot create (out of scope)\n")
 			}
@@ -307,7 +307,7 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 			if app != nil {
 				result.WriteString(m.FormatQuery(app, edit[2]))
 			} else if edit[2] {
-				result.WriteString("Doens't exist, can be created\n")
+				result.WriteString("Doesn't exist, can be created\n")
 			} else {
 				result.WriteString("Does not exist, cannot create (out of scope)\n")
 			}
@@ -318,7 +318,7 @@ func (m *MCPBackend) FormatQueryHierarchy(queries []*Cx1ClientGo.SASTQuery, view
 			if proj != nil {
 				result.WriteString(m.FormatQuery(proj, edit[3]))
 			} else if edit[3] {
-				result.WriteString("Doens't exist, can be created\n")
+				result.WriteString("Doesn't exist, can be created\n")
 			} else {
 				result.WriteString("Does not exist, cannot create (out of scope)\n")
 			}
