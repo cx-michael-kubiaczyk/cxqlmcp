@@ -192,6 +192,16 @@ func (m *MCP) registerTools() {
 		return textResult(m.SearchCxQLDocs(input.Query)), nil, nil
 	})
 
+	type querySearchInput struct {
+		Substring string `json:"substring" jsonschema:"Text to search for within CxQL query names, e.g. HSTS_Sanitize"`
+	}
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "search_queries",
+		Description: "Searches the names of all known CxQL queries (across every language and group) for a substring, returning each match's full Language.Group.QueryName path. Use this to locate a query's group when only its short name is known, instead of guessing get_query_info calls against different group names.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input querySearchInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.SearchQueries(input.Substring)), nil, nil
+	})
+
 	type showCodeInput struct {
 		Path      string `json:"path" jsonschema:"File path within the scanned project"`
 		LineStart int    `json:"line_start" jsonschema:"First line to show (1-indexed)"`

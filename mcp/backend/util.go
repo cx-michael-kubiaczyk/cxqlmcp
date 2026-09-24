@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
@@ -157,6 +158,36 @@ func (m *MCPBackend) getZip() []byte {
 	return buf.Bytes()
 }
 */
+
+// SearchQueries finds queries whose short name contains substring
+// (case-insensitive), across every language and group already loaded into
+// m.Queries, and returns each match's full Language.Group.Name path plus
+// which hierarchy level(s) define it. This lets a caller locate a query's
+// group from its short name alone, instead of guessing at get_query_info
+// calls against different group names until one happens to resolve.
+func (m *MCPBackend) SearchQueries(substring string) []string {
+	needle := strings.ToLower(substring)
+	levelsByKey := map[string][]string{}
+	var order []string
+
+	for _, q := range m.Queries.GetQueries() {
+		if !strings.Contains(strings.ToLower(q.Name), needle) {
+			continue
+		}
+		key := fmt.Sprintf("%s.%s.%s", q.Language, q.Group, q.Name)
+		if _, seen := levelsByKey[key]; !seen {
+			order = append(order, key)
+		}
+		levelsByKey[key] = append(levelsByKey[key], q.Level)
+	}
+
+	sort.Strings(order)
+	results := make([]string, 0, len(order))
+	for _, key := range order {
+		results = append(results, fmt.Sprintf("%s (defined at: %s)", key, strings.Join(levelsByKey[key], ", ")))
+	}
+	return results
+}
 
 func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
 	if m.Target.Project == nil {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 )
@@ -120,6 +121,24 @@ func (m *MCP) GetQueryInfoFiltered(language, group, name string, view, edit []bo
 	}
 
 	return m.backend.FormatQueryHierarchy(queries, view, edit)
+}
+
+// searches all known queries (product, tenant, and any application/project
+// overrides already loaded in this session) for a name containing substring,
+// and returns each match's full Language.Group.QueryName path. Use this to
+// locate a query's group when only its short name is known, rather than
+// guessing get_query_info calls against different group names.
+func (m *MCP) SearchQueries(substring string) string {
+	matches := m.backend.SearchQueries(substring)
+	if len(matches) == 0 {
+		return fmt.Sprintf("No queries found with a name containing %q.", substring)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Queries with a name containing %q:\n", substring))
+	for _, match := range matches {
+		sb.WriteString("- " + match + "\n")
+	}
+	return sb.String()
 }
 
 // returns only the source code for a query at a specific hierarchy level, eg: Missing_HSTS_Header at the Project level
