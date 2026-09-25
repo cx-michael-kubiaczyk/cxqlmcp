@@ -29,10 +29,22 @@ type MCPBackend struct {
 	Queries      Cx1ClientGo.SASTQueryCollection
 	descriptions map[uint64]Cx1ClientGo.SASTQueryDescription
 
-	// originalSources holds, per query EditorKey, the source a query had before
-	// the first SaveQuery call in this session touched it, so RestoreQuery can
-	// revert an override back to that pre-edit state.
-	originalSources map[string]string
+	// modifiedQueries tracks, per query EditorKey, the pre-edit source a query had
+	// before the first SaveQuery call in this session touched it (Original) and the
+	// most recently saved source (Latest). Entries exist only for queries currently
+	// modified relative to their original in this session; RestoreQuery removes the
+	// entry once a query is reverted.
+	modifiedQueries map[string]modifiedQueryEntry
+}
+
+type modifiedQueryEntry struct {
+	Language string
+	Group    string
+	Name     string
+	Level    string
+	LevelID  string
+	Original string
+	Latest   string
 }
 
 // ControlProject represents a TP/TN reference project cloned into the test
@@ -53,7 +65,7 @@ func NewBackend(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger) MCPBack
 		logger:          logger,
 		ScanSources:     NewCodeSet(),
 		descriptions:    make(map[uint64]Cx1ClientGo.SASTQueryDescription),
-		originalSources: make(map[string]string),
+		modifiedQueries: make(map[string]modifiedQueryEntry),
 	}
 }
 
@@ -106,6 +118,27 @@ func (m *MCPBackend) GetCurrentApplicationID() string {
 		return "Error: no application configured"
 	}
 	return m.Target.Application.ApplicationID
+}
+func (m *MCPBackend) GetCurrentProjectName() string {
+	if m.Target.Project == nil {
+		return "Error: no project configured"
+	}
+	return m.Target.Project.Name
+}
+func (m *MCPBackend) GetCurrentApplicationName() string {
+	if m.Target.Application == nil {
+		return "Error: no application configured"
+	}
+	return m.Target.Application.Name
+}
+
+// GetCurrentFindingQuery returns the Language.Group.QueryName of the query
+// that produced the target finding for this session.
+func (m *MCPBackend) GetCurrentFindingQuery() string {
+	if m.Target.Result == nil {
+		return "Error: no finding loaded"
+	}
+	return fmt.Sprintf("%s.%s.%s", m.Target.Result.Data.LanguageName, m.Target.Result.Data.Group, m.Target.Result.Data.QueryName)
 }
 
 // CreateTestEnvironment builds a disposable Cx1 Application containing a full-source
@@ -460,30 +493,50 @@ func (m *MCPBackend) SaveQuery(query *Cx1ClientGo.SASTQuery, source string) (Cx1
 		return Cx1ClientGo.QueryRun{}, fmt.Errorf("failed to refresh audit session: %v", err)
 	}
 
-	if _, ok := m.originalSources[query.EditorKey]; !ok {
-		m.originalSources[query.EditorKey] = query.Source
+	entry, existed := m.modifiedQueries[query.EditorKey]
+	if !existed {
+		entry = modifiedQueryEntry{
+			Language: query.Language,
+			Group:    query.Group,
+			Name:     query.Name,
+			Level:    query.Level,
+			LevelID:  query.LevelID,
+			Original: query.Source,
+		}
 	}
 
 	_, run, err := m.Cx1Client.UpdateSASTQuerySource(m.session, *query, source)
+	if err != nil {
+		return Cx1ClientGo.QueryRun{FailedQueries: run}, err
+	}
 
-	return Cx1ClientGo.QueryRun{FailedQueries: run}, err
+	entry.Latest = source
+	m.modifiedQueries[query.EditorKey] = entry
+
+	return Cx1ClientGo.QueryRun{FailedQueries: run}, nil
 }
 
 // RestoreQuery reverts query's override back to the source it had before the
-// first SaveQuery call touched it in this session. Returns an error if no such
-// baseline was ever recorded (i.e. this query was never saved).
+// first SaveQuery call touched it in this session, and removes it from the
+// set of currently-modified queries. Returns an error if no such baseline was
+// ever recorded (i.e. this query was never saved, or was already restored).
 func (m *MCPBackend) RestoreQuery(query *Cx1ClientGo.SASTQuery) (Cx1ClientGo.QueryRun, string, error) {
 	if query == nil {
 		return Cx1ClientGo.QueryRun{}, "", fmt.Errorf("nil query provided")
 	}
 
-	original, ok := m.originalSources[query.EditorKey]
+	entry, ok := m.modifiedQueries[query.EditorKey]
 	if !ok {
 		return Cx1ClientGo.QueryRun{}, "", fmt.Errorf("no original version recorded for query %s.%s.%s at this level; it was never saved in this session", query.Language, query.Group, query.Name)
 	}
 
-	run, err := m.SaveQuery(query, original)
-	return run, original, err
+	run, err := m.SaveQuery(query, entry.Original)
+	if err != nil {
+		return run, entry.Original, err
+	}
+
+	delete(m.modifiedQueries, query.EditorKey)
+	return run, entry.Original, nil
 }
 
 func (m *MCPBackend) GetQueryDescription(queryId uint64) (Cx1ClientGo.SASTQueryDescription, error) {

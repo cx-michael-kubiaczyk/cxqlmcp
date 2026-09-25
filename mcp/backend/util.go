@@ -189,6 +189,69 @@ func (m *MCPBackend) SearchQueries(substring string) []string {
 	return results
 }
 
+// ListModifiedQueries returns one line per query currently modified (saved and
+// not yet restored) in this session, in the same "Language.Group.Name" style
+// as SearchQueries, annotated with the hierarchy level it was saved at.
+func (m *MCPBackend) ListModifiedQueries() []string {
+	keys := make([]string, 0, len(m.modifiedQueries))
+	for k := range m.modifiedQueries {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := m.modifiedQueries[keys[i]], m.modifiedQueries[keys[j]]
+		return fmt.Sprintf("%s.%s.%s", a.Language, a.Group, a.Name) < fmt.Sprintf("%s.%s.%s", b.Language, b.Group, b.Name)
+	})
+
+	results := make([]string, 0, len(keys))
+	for _, k := range keys {
+		e := m.modifiedQueries[k]
+		results = append(results, fmt.Sprintf("%s.%s.%s (%s level)", e.Language, e.Group, e.Name, e.Level))
+	}
+	return results
+}
+
+// QueryChangesReport returns a full before/after report of every query
+// modified (saved and not yet restored) in this session, as
+// Language.Group.Name (Level level) headers each followed by a
+// ```original``` -> ```latest``` code block pair, in the same sort order as
+// ListModifiedQueries. Returns a human-readable "none" message if nothing was
+// modified.
+func (m *MCPBackend) QueryChangesReport() string {
+	if len(m.modifiedQueries) == 0 {
+		return "No queries were modified in this session."
+	}
+
+	keys := make([]string, 0, len(m.modifiedQueries))
+	for k := range m.modifiedQueries {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := m.modifiedQueries[keys[i]], m.modifiedQueries[keys[j]]
+		return fmt.Sprintf("%s.%s.%s", a.Language, a.Group, a.Name) < fmt.Sprintf("%s.%s.%s", b.Language, b.Group, b.Name)
+	})
+
+	var sb strings.Builder
+	for _, k := range keys {
+		e := m.modifiedQueries[k]
+		fmt.Fprintf(&sb, "%s.%s.%s (%s level):\n```csharp\n%s\n```\n->\n```csharp\n%s\n```\n\n", e.Language, e.Group, e.Name, e.Level, e.Original, e.Latest)
+	}
+	return sb.String()
+}
+
+// QueryChanges returns the pre-edit and latest-saved source for query, or an
+// error if it isn't currently modified in this session (mirrors RestoreQuery's
+// error).
+func (m *MCPBackend) QueryChanges(query *Cx1ClientGo.SASTQuery) (original, latest string, err error) {
+	if query == nil {
+		return "", "", fmt.Errorf("nil query provided")
+	}
+	entry, ok := m.modifiedQueries[query.EditorKey]
+	if !ok {
+		return "", "", fmt.Errorf("no changes recorded for query %s.%s.%s at this level; it was never saved in this session, or has since been restored", query.Language, query.Group, query.Name)
+	}
+	return entry.Original, entry.Latest, nil
+}
+
 func (m *MCPBackend) GetQueryHierarchy(language, group, name string) ([]*Cx1ClientGo.SASTQuery, error) {
 	if m.Target.Project == nil {
 		return nil, fmt.Errorf("no project loaded")

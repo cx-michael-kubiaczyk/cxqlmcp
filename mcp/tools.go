@@ -172,6 +172,20 @@ func (m *MCP) SearchQueries(substring string) string {
 	return sb.String()
 }
 
+// lists every query currently modified (saved and not yet restored) in this session.
+func (m *MCP) ListModifiedQueries() string {
+	matches := m.backend.ListModifiedQueries()
+	if len(matches) == 0 {
+		return "No queries are currently modified in this session."
+	}
+	var sb strings.Builder
+	sb.WriteString("Queries modified in this session:\n")
+	for _, match := range matches {
+		sb.WriteString("- " + match + "\n")
+	}
+	return sb.String()
+}
+
 // returns only the source code for a query at a specific hierarchy level, eg: Missing_HSTS_Header at the Project level
 func (m *MCP) GetQueryCode(level, language, group, query string) string {
 	level, levelID := m.getLevels(level)
@@ -323,12 +337,47 @@ func (m *MCP) RestoreQuery(level, language, group, query string) string {
 	return fmt.Sprintf("Query %s.%s.%s restored to its original version.", language, group, query)
 }
 
+// shows the pre-edit and latest-saved source for a query modified this session,
+// as ```original``` -> ```new``` code blocks.
+func (m *MCP) ShowQueryChanges(level, language, group, query string) string {
+	levelStr, levelID := m.getLevels(level)
+	language = m.backend.QueryLanguageCheck(language, group, query)
+
+	executedQuery := m.backend.Queries.GetQueryByLevelAndName(levelStr, levelID, language, group, query)
+	if executedQuery == nil {
+		return fmt.Sprintf("Error: The %s-level query %s.%s.%s does not exist", level, language, group, query)
+	}
+
+	original, latest, err := m.backend.QueryChanges(executedQuery)
+	if err != nil {
+		return fmt.Sprintf("Error: %s", err)
+	}
+
+	return fmt.Sprintf("```csharp\n%s\n```\n->\n```csharp\n%s\n```\n", original, latest)
+}
+
 func (m *MCP) GetCurrentApplicationID() string {
 	return m.backend.GetCurrentApplicationID()
 }
 
 func (m *MCP) GetCurrentProjectID() string {
 	return m.backend.GetCurrentProjectID()
+}
+
+func (m *MCP) GetCurrentApplicationName() string {
+	return m.backend.GetCurrentApplicationName()
+}
+
+func (m *MCP) GetCurrentProjectName() string {
+	return m.backend.GetCurrentProjectName()
+}
+
+func (m *MCP) GetCurrentFindingQuery() string {
+	return m.backend.GetCurrentFindingQuery()
+}
+
+func (m *MCP) QueryChangesReport() string {
+	return m.backend.QueryChangesReport()
 }
 
 func (m *MCP) getLevels(level string) (string, string) {

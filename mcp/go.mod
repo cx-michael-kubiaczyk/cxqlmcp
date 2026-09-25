@@ -3,7 +3,7 @@ module github.com/cxpsemea/cxqlmcp/mcp
 go 1.26.3
 
 require (
-	github.com/cxpsemea/Cx1ClientGo v0.1.67
+	github.com/cxpsemea/Cx1ClientGo v0.1.69
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/sirupsen/logrus v1.9.4
 )
@@ -19,5 +19,3 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
-
-replace 	github.com/cxpsemea/Cx1ClientGo v0.1.67 => c:/work/code/cx1clientgo

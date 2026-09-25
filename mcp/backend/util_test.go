@@ -115,6 +115,46 @@ func bytesToResult(b []byte) Cx1ClientGo.ScanSASTResult {
 	}
 }
 
+func TestListModifiedQueries(t *testing.T) {
+	m := MCPBackend{
+		modifiedQueries: map[string]modifiedQueryEntry{
+			"key-hsts": {Language: "JavaScript", Group: "JavaScript_Medium_Threat", Name: "Missing_HSTS_Header", Level: "Project", LevelID: "proj-1", Original: "old hsts source", Latest: "new hsts source"},
+			"key-xss":  {Language: "JavaScript", Group: "JavaScript_High_Risk", Name: "Reflected_XSS", Level: "Tenant", LevelID: "Cx", Original: "old xss source", Latest: "new xss source"},
+		},
+	}
+
+	got := m.ListModifiedQueries()
+	want := []string{
+		"JavaScript.JavaScript_High_Risk.Reflected_XSS (Tenant level)",
+		"JavaScript.JavaScript_Medium_Threat.Missing_HSTS_Header (Project level)",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListModifiedQueries() = %v, want %v", got, want)
+	}
+}
+
+func TestQueryChanges(t *testing.T) {
+	m := MCPBackend{
+		modifiedQueries: map[string]modifiedQueryEntry{
+			"key-hsts": {Language: "JavaScript", Group: "JavaScript_Medium_Threat", Name: "Missing_HSTS_Header", Level: "Project", LevelID: "proj-1", Original: "old hsts source", Latest: "new hsts source"},
+		},
+	}
+
+	modified := &Cx1ClientGo.SASTQuery{Language: "JavaScript", Group: "JavaScript_Medium_Threat", Name: "Missing_HSTS_Header", EditorKey: "key-hsts"}
+	original, latest, err := m.QueryChanges(modified)
+	if err != nil {
+		t.Fatalf("QueryChanges() unexpected error: %s", err)
+	}
+	if original != "old hsts source" || latest != "new hsts source" {
+		t.Errorf("QueryChanges() = (%q, %q), want (%q, %q)", original, latest, "old hsts source", "new hsts source")
+	}
+
+	untouched := &Cx1ClientGo.SASTQuery{Language: "JavaScript", Group: "JavaScript_High_Risk", Name: "Reflected_XSS", EditorKey: "key-xss"}
+	if _, _, err := m.QueryChanges(untouched); err == nil {
+		t.Error("QueryChanges() expected an error for a query never modified, got nil")
+	}
+}
+
 func TestQueryFormat(t *testing.T) {
 	data := []byte(`[
   {

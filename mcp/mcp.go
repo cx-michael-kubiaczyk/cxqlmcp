@@ -172,6 +172,13 @@ func (m *MCP) registerTools() {
 		return textResult(m.RestoreQuery(input.Level, input.Language, input.Group, input.Name)), nil, nil
 	})
 
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "show_query_changes",
+		Description: "Shows the pre-edit and most-recently-saved CxQL source for a query modified in this session, as ```original``` -> ```new``` code blocks. Errors if the query was never saved this session, or has since been restored.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input queryInput) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.ShowQueryChanges(input.Level, input.Language, input.Group, input.Name)), nil, nil
+	})
+
 	type searchInput struct {
 		Substring string `json:"substring" jsonschema:"Text to search for within the scanned source code"`
 	}
@@ -200,6 +207,13 @@ func (m *MCP) registerTools() {
 		Description: "Searches the names of all known CxQL queries (across every language and group) for a substring, returning each match's full Language.Group.QueryName path. Use this to locate a query's group when only its short name is known, instead of guessing get_query_info calls against different group names.",
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, input querySearchInput) (*mcpsdk.CallToolResult, any, error) {
 		return textResult(m.SearchQueries(input.Substring)), nil, nil
+	})
+
+	mcpsdk.AddTool(m.server, &mcpsdk.Tool{
+		Name:        "list_modified_queries",
+		Description: "Lists CxQL queries currently modified (saved and not yet restored) in this session, one per line as Language.Group.Name plus the hierarchy level they were saved at.",
+	}, func(_ context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return textResult(m.ListModifiedQueries()), nil, nil
 	})
 
 	type showCodeInput struct {
